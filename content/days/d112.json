@@ -1,0 +1,72 @@
+{
+  "day": 112,
+  "title": "Week 16 复盘 + 整理 SFT+DPO pipeline",
+  "sections": [
+    {
+      "h": "Week 16 复盘",
+      "md": "这一周完成了一次完整的对齐闭环：指令数据构造 → SFT → 偏好数据 → DPO → 对齐评估。回看几个容易翻车的点：\n\n- **SFT 数据质量 > 数量**：3K 高质量指令数据效果可以超过 50K 噪声数据（LIMA 的核心结论）\n- **灾难性遗忘**：只喂指令数据会损伤基座能力，混入 20–30% 通用预训练数据可缓解\n- **DPO 训练集退化**：loss 降到很低但 chosen/reward margin 也在收窄，模型在摆烂输出趋同\n- **评估先行**：对齐效果必须用开放式评估（AlpacaEval/人工），看 loss 没有意义\n\n今天的任务：把散落的脚本整理成**可复用 pipeline**，并写一篇总结 blog。"
+    },
+    {
+      "h": "把 SFT 封装成 train_sft.py",
+      "md": "目标是一个脚本跑完：`python train_sft.py --config sft.yaml`。封装要点：\n\n```yaml\n# sft.yaml\nbase_model: meta-llama/Llama-3.2-1B\nlora_r: 16            # 显存不够就上 LoRA\nepochs: 3\nlr: 2e-5\ndata: data/sft.jsonl  # {\"messages\": [{role, content}, ...]}\nmix_ratio: 0.3        # 混入通用数据的比例\nsave: ckpt/sft-l3.2-1b\n```\n\n两个必做细节：**loss mask**——只对 assistant 回复部分计算 loss，不惩罚用户的提问（MLX 的 `prompt_loss_mask`、HF 的 `-100` 标签）；**打包与掩码分离**——多样本拼包节省算力时，注意力掩码要按样本边界切断，否则不同样本互相看见。"
+    },
+    {
+      "h": "把 DPO 封装成 train_dpo.py",
+      "md": "DPO 脚本在 SFT 之上多三样东西：冻结的参考模型、偏好数据格式、β 超参。\n\n```yaml\n# dpo.yaml\nsft_model: ckpt/sft-l3.2-1b   # 起点 = SFT 后的模型\nbeta: 0.1                      # 偏好强度\nlr: 5e-7                       # 比 SFT 小两个数量级\ndata: data/prefs.jsonl         # {\"prompt\", \"chosen\", \"rejected\"}\n```\n\nDPO 损失用**对数概率比**写成：\n\n```\nL = -log σ( β · [ (log π_θ(y_w|x) - log π_ref(y_w|x))\n                - (log π_θ(y_l|x) - log π_ref(y_l|x)) ] )\n```\n\n直觉：鼓励被测模型相对参考模型**提升 chosen、压低 rejected**，β 控制「偏离参考模型多远仍算改进」。监控三个量：loss、chosen/rejected 相对参考模型的 reward margin、KL 估计值。margin 持续扩大且 KL 温和 = 训练健康。"
+    },
+    {
+      "h": "串成一条 pipeline",
+      "md": "两条腿齐了，用 shell 串成一条可一键重跑的链路：\n\n```bash\n#!/bin/bash\nset -e\npython prep_data.py            # 清洗 + 分层抽样 + 划分\npython train_sft.py  --config sft.yaml\npython gen_prefs.py  --model ckpt/sft-l3.2-1b   # 构造/筛选偏好对\npython train_dpo.py  --config dpo.yaml\npython run_eval.py   --model ckpt/dpo-l3.2-1b \\\n    --alpaca_subset 100 --human_samples 50\n```\n\n**可复用**的判断标准：换一个基座模型时只改两行配置，其余零改动。评估脚本的输出（胜率、人工分）追加写入一个 `results.md`，让每次 pipeline 跑完自动留档——下周对比推理优化时，这些数字就是基线。"
+    },
+    {
+      "h": "写 blog：LLM 对齐的两种路径",
+      "md": "用一小时写一篇短文（先列骨架再填肉）：\n\n1. **开场提问**：模型已经会说话了，为什么还要对齐？——预训练学「能说什么」，对齐学「该怎么说」\n2. **路径 A：RLHF**——训练奖励模型 + PPO 在线优化；表达力强、可探索新策略，但工程链路重、reward hacking 难防\n3. **路径 B：DPO**——数学上证明偏好优化可改写为直接损失，离线、稳定、代码量 1/10；但上限受偏好数据覆盖面限制，难有超越数据的新行为\n4. **结论**：小团队/个人 → DPO 起步；追求天花板 → RLHF（或 GRPO 等后继）\n\n写作要点：每条结论配一个你自己跑出来的数字（哪怕很小规模），比引用论文更有说服力。这篇 blog 同时是 Week 16 的知识存档——教是最好的学。"
+    }
+  ],
+  "keyPoints": [
+    "SFT 数据质量优先于数量，混 20–30% 通用数据防灾难遗忘",
+    "SFT 脚本两个关键：assistant 部分的 loss mask、拼包时按样本边界切注意力",
+    "DPO 损失作用于对数概率比，β 控制相对参考模型的偏离幅度，lr 通常比 SFT 小两个量级",
+    "DPO 健康信号：chosen/rejected reward margin 扩大且 KL 温和",
+    "pipeline 可复用的标准：换基座只改配置；评估结果自动留档",
+    "RLHF 表达力强但工程重，DPO 简单稳定但受离线数据覆盖面限制"
+  ],
+  "quiz": [
+    {
+      "q": "SFT 时混入 20–30% 通用预训练数据的主要目的是？",
+      "options": ["加快训练", "防止灾难性遗忘，保住基座的通用能力", "增大有效 batch", "让 loss 下降更快"],
+      "answer": 1,
+      "explain": "只喂指令数据会让模型过度适配窄分布、丢失基座能力，混入通用数据是最常用的缓解手段。"
+    },
+    {
+      "q": "训练脚本里对用户提问部分不算 loss（loss mask），原因是？",
+      "options": ["省显存", "我们只想学习生成 assistant 的回复，不必学预测用户会说什么", "提高吞吐", "防止梯度爆炸"],
+      "answer": 1,
+      "explain": "语言建模目标会作用在所有 token 上，mask 掉用户部分使监督信号集中在「如何回答」而非「如何提问」。"
+    },
+    {
+      "q": "DPO 训练中监控发现 reward margin 不断扩大、KL 温和上升，说明？",
+      "options": ["训练在健康进行", "必然过拟合", "β 设大了", "数据泄漏"],
+      "answer": 0,
+      "explain": "margin 扩大表示模型成功区分偏好，KL 温和说明没有狂奔偏离参考模型，这是 DPO 的理想状态。"
+    },
+    {
+      "q": "DPO 的 β 参数调大，效果是？",
+      "options": ["模型更激进地偏离参考模型", "对偏离参考模型施加更强约束、更新更保守", "训练更快", "偏好数据需求更少"],
+      "answer": 1,
+      "explain": "β 放大相对参考模型对数概率比的差异信号，等价于更强的 KL 约束，太大会让模型几乎不动。"
+    },
+    {
+      "q": "「pipeline 可复用」在本日的判断标准是？",
+      "options": ["代码超过 1000 行", "换基座模型只改配置文件，其余零改动", "用了最新的库", "评估只用自动指标"],
+      "answer": 1,
+      "explain": "可复用性的本质是把「模型相关的选择」收敛进配置，流程代码与具体模型解耦。"
+    },
+    {
+      "q": "相比 RLHF，DPO 的主要局限是？",
+      "options": ["数学上不正确", "离线优化难以产生超越偏好数据覆盖的新行为", "不能用于对话模型", "必须训练奖励模型"],
+      "answer": 1,
+      "explain": "DPO 在固定偏好对上优化，上限受数据集分布约束；RLHF 在线采样可探索新策略，但工程链路重得多。"
+    }
+  ]
+}

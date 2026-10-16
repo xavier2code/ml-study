@@ -1,0 +1,71 @@
+{
+  "day": 106,
+  "title": "SFT 数据准备",
+  "sections": [
+    {
+      "h": "对齐第一步：从续写到听话",
+      "md": "昨天你亲眼看到：base 模型是续写机器，不是助手。**SFT（Supervised Fine-Tuning，监督微调）做的就是用「问-答」样本教会模型：看到指令，输出应答**。\n\n直觉：预训练像让孩子读完全城图书馆，SFT 像教他「别人问路时要怎么答话」。知识早已在参数里，SFT 只教行为格式与角色，不需要海量数据——5K 条高质量样本就足以让 124M 模型判若两人。\n\n与 Agent 关联：Agent 调用的 LLM 必须经过 SFT，否则它收到「调用搜索工具」的指令时会续写出乱码而非结构化响应。"
+    },
+    {
+      "h": "三大开源数据集格式",
+      "md": "**1. Alpaca**（斯坦福，52K，GPT 生成）：\n\n```json\n{\"instruction\": \"把下面句子翻译成英文\",\n \"input\": \"今天天气很好\",\n \"output\": \"The weather is nice today\"}\n```\n\n**2. Dolly**（Databricks，15K，人写，含 context 字段）：\n\n```json\n{\"instruction\": \"解释什么是梯度下降\",\n \"context\": \"（可选参考段落）\",\n \"response\": \"梯度下降是一种优化算法……\"}\n```\n\n**3. OpenAssistant（OASST）**（众包多轮对话，树状结构）：message 带 role（prompter/assistant），需沿树抽取多轮路径。\n\n三者对比：\n\n| 数据集 | 规模 | 生成方式 | 特点 |\n|---|---|---|---|\n| Alpaca | 52K | GPT-3 生成 | 指令多样、质量一般 |\n| Dolly | 15K | 员工人工撰写 | 质量高、领域集中 |\n| OASST | 16K 会话 | 众包+人评 | 有多轮、真实感强 |\n\n共同点：核心都是 instruction → output 配对；差别在字段名和多轮结构。今天的目标是把它们统一成自己的标准格式。"
+    },
+    {
+      "h": "统一目标格式",
+      "md": "我们定义自己的标准 schema，兼容单轮与多轮：\n\n```json\n{\n  \"conversations\": [\n    {\"role\": \"user\", \"content\": \"解释什么是过拟合\"},\n    {\"role\": \"assistant\", \"content\": \"过拟合是指……\"}\n  ],\n  \"source\": \"alpaca\",\n  \"lang\": \"zh\"\n}\n```\n\n转换要点：\n\n- Alpaca：instruction + input 拼成 user 消息，output 即 assistant 消息\n- Dolly：context 拼进 user 消息开头，response 进 assistant\n- OASST：沿树抽取一条完整路径，prompter→user、assistant→assistant，保留多轮顺序\n\n为什么统一成 role 数组而不是 instruction/output 扁平结构？因为多轮对话天然是序列，且和 ChatML 模板、TRL 的 messages 字段直接兼容，后续 DPO 也复用同一格式。"
+    },
+    {
+      "h": "清洗 + 格式化 5K 中文 SFT 数据",
+      "md": "今天的主任务：攒出 **5000 条中文 SFT 数据**。来源两路：开源中文指令集（如 BELLE、COIG 子集）+ 从 Alpaca 中英混合抽取并用规则/模型粗翻的部分。清洗流水线：\n\n```python\ndef clean(sample):\n    # 1) 长度过滤：question <4 字 或 answer >2048 字 丢弃\n    if len(q) < 4 or len(a) > 2048: return None\n    # 2) 语言检查：中文字符占比 >60% 才保留\n    if zh_ratio(q + a) < 0.6: return None\n    # 3) 去重：instruction 做 8-gram 相似度去重\n    # 4) 质量红线：answer 含「作为一个AI语言模型」开头 → 丢弃（模仿痕迹）\n    # 5) 安全：涉黄涉政暴力等关键词 → 丢弃\n    return sample\n```\n\n五步之后 20K 原始数据通常剩 30%~50%，从合格池里按任务类型分层抽样 5K：问答 40%、写作 20%、翻译 15%、代码 15%、闲聊 10%。\n\n> 质量重于数量的铁律：1K 条人工精修样本的效果往往好于 50K 条噪声样本——SFT 教的是行为，坏样本教坏习惯。分层抽样防止模型只学会写诗不会算术。"
+    },
+    {
+      "h": "今日串联",
+      "md": "今天产出：一份 `sft_zh_5k.jsonl`，每行一条标准 conversations 格式，五重清洗、按任务分层。它就是明天 SFTTrainer 的全部口粮。\n\n明日预告：用 TRL 的 SFTTrainer 把这份口粮喂给 mini-LLaMA——工业标准的 SFT 流程，核心只有一个细节：**只对 assistant 部分算 loss**。"
+    }
+  ],
+  "keyPoints": [
+    "SFT 教行为不灌知识：base 已有知识，5K 高质量样本足以改变应答模式",
+    "三大数据集核心均为 instruction→output 配对，差别在字段名与多轮结构（OASST 树状）",
+    "统一目标格式：conversations 数组（role: user/assistant），兼容 ChatML 模板与 TRL/DPO 复用",
+    "清洗五步：长度过滤 → 中文占比 → 8-gram 去重 → 质量红线（AI 腔开头丢弃）→ 安全过滤",
+    "分层抽样 5K：问答 40/写作 20/翻译 15/代码 15/闲聊 10，防能力偏科"
+  ],
+  "quiz": [
+    {
+      "q": "SFT 只用 5K 样本就能明显改变模型行为，最合理的解释是？",
+      "options": ["5K 已经足够灌入新知识", "SFT 教的是应答行为与格式，知识在预训练里已经有了", "5K 是 Transformer 的最低要求", "因为 lr 设得很小"],
+      "answer": 1,
+      "explain": "预训练负责知识（压缩语料），SFT 负责行为（指令→应答的映射）。行为模式维度低，小数据即可塑造；这也是 LIMA 论文「1000 条样本足矣」的核心洞察。"
+    },
+    {
+      "q": "Alpaca 与 Dolly 数据集最关键的差异是？",
+      "options": ["Alpaca 是 GPT 生成、Dolly 是人工撰写", "字段数量不同", "语言不同", "许可证不同"],
+      "answer": 0,
+      "explain": "Alpaca 52K 由 GPT-3 生成（多样但平淡、有模仿痕迹），Dolly 15K 由员工撰写（质量高、领域集中）。生成方式决定了数据气质与清洗策略。"
+    },
+    {
+      "q": "清洗时看到回答以「作为一个AI语言模型，我无法……」开头，为什么要丢弃？",
+      "options": ["太长了浪费 token", "会让模型学会这种套话开头，模仿痕迹重、体验差", "JSON 里不好转义", "这属于安全问题"],
+      "answer": 1,
+      "explain": "SFT 是行为克隆：模型会忠实复制训练样本的说话习惯。套话样本多了，你的助手每句话都以免责声明开头，质量红线过滤的正是这类坏习惯。"
+    },
+    {
+      "q": "自定义 SFT 格式选 conversations 数组（role/content）而非扁平 instruction/output，主要原因是？",
+      "options": ["JSON 更短", "天然表达多轮对话，且与 ChatML 模板、TRL 的 messages 字段直接兼容", "解析速度快 10 倍", "days.json 规定的"],
+      "answer": 1,
+      "explain": "多轮对话是序列，扁平结构表达不了；且 ChatML/TRL/DPO 都消费 role 数组，一次格式投资全程复用。"
+    },
+    {
+      "q": "5K 数据按「问答 40/写作 20/翻译 15/代码 15/闲聊 10」分层抽样，主要目的是？",
+      "options": ["凑够 5000 条", "防止任务类型失衡导致能力偏科——模型只会某几类任务", "让 loss 曲线更好看", "减少训练时间"],
+      "answer": 1,
+      "explain": "若按原始比例抽，闲聊和单一任务可能占 80%，模型学会尬聊却不会代码。分层保证行为覆盖面，是数据工程的基本功。"
+    },
+    {
+      "q": "「1K 人工精修样本效果好于 50K 噪声样本」这一现象背后的原理是？",
+      "options": ["SFT 数据越少越不容易过拟合，与质量无关", "SFT 是行为克隆，噪声样本会把错误行为也克隆进去", "小数据训练速度快", "学习率自适应"],
+      "answer": 1,
+      "explain": "模型不区分好坏，全部模仿。噪声里的坏格式、错误答案、套话都会被学走。质量优先于数量是 SFT 数据的第一铁律。"
+    }
+  ]
+}

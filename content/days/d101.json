@@ -1,0 +1,102 @@
+{
+  "day": 101,
+  "title": "GQA（Grouped Query Attention）深入",
+  "sections": [
+    {
+      "h": "推理的瓶颈：KV cache 的读写",
+      "md": "先搞清楚 GQA 在解决什么。自回归解码时每个新 token 都要对全部历史做注意力，不缓存的话第 t 步要重算前面所有 K、V。所以推理引擎都维护 **KV cache**：把每个新 token 的 K、V 追加进缓存。\n\n瓶颈随之转移：**每步都要把整个 KV cache 从显存搬到计算单元**。MHA 下 cache = 2 × 层数 × 头数 × 头维 × 序列长 × batch × 2 字节——32 层 × 32 头 × 128 维 × 4096 长 × fp16 ≈ **2GB/条序列**，batch 一大显存被吃光。解码是 **memory-bound**：算力闲置，等数据搬完。直觉：瓶颈是 KV 太多，那就少存点。"
+    },
+    {
+      "h": "MHA → MQA → GQA 的谱系",
+      "md": "**MHA**：H 个 query 头配 H 组 KV——表达力最强，cache 最大。\n\n**MQA（2019）**：**所有 query 头共享同一组 KV**，KV 头数 = 1，cache 直接除以 H；代价是质量掉一截，单组 KV 成了表达瓶颈。\n\n**GQA（2023）**：把 H 个 query 头分成 G 组，**每组共享一组 KV**。G=1 退化 MQA，G=H 退化 MHA。论文结论：GQA-8 质量≈MHA、速度接近 MQA——**快慢之间的甜点位**。LLaMA 2 70B、Mistral、Qwen 全线采用。\n\n| 方案 | Q 头 | KV 头 | 质量 | cache 相对 MHA |\n|---|---|---|---|---|\n| MHA | 32 | 32 | 基准 | 1× |\n| GQA-8 | 32 | 8 | ≈基准 | 1/4 |\n| MQA | 32 | 1 | 掉点明显 | 1/32 |\n\n隐藏收益：cache 小 → 同显存塞更大 batch → 吞吐再升。"
+    },
+    {
+      "h": "实现：GQA on top of MHA",
+      "md": "关键是**分组共享的形状操作**：设 n_head=8、n_kv_head=2，每 4 个 Q 头共享 1 组 KV。\n\n```python\nclass GQA(nn.Module):\n    def __init__(self, dim, n_head=8, n_kv_head=2):\n        assert n_head % n_kv_head == 0\n        self.g = n_head // n_kv_head\n        self.wq = nn.Linear(dim, dim, bias=False)\n        self.wk = nn.Linear(dim, dim//self.g, bias=False)  # 只出 2 头\n        self.wv = nn.Linear(dim, dim//self.g, bias=False)\n        self.wo = nn.Linear(dim, dim, bias=False)\n    def forward(self, x):\n        B, T, C = x.shape\n        q = self.wq(x).view(B, T, 8, C//8)\n        k = self.wk(x).view(B, T, 2, C//8)\n        v = self.wv(x).view(B, T, 2, C//8)\n        k = k.repeat_interleave(self.g, dim=2)   # 扩成 8 头\n        v = v.repeat_interleave(self.g, dim=2)\n        att = q @ k.transpose(-2, -1) / math.sqrt(q.size(-1))\n        att = att.masked_fill(mask[:T,:T] == 0, float('-inf'))\n        y = F.softmax(att, -1) @ v\n        return self.wo(y.transpose(1, 2).reshape(B, T, C))\n```\n\n要点：①`repeat_interleave(g, dim=2)` 把 2 个 KV 头扩成 8 份，**相邻 g 个 Q 头对齐同一组 KV**；②`wk/wv` 只输出 2 头的量，参数与 cache 同步缩小，**cache 里也只存 2 头**。工业版用 `scaled_dot_product_attention(enable_gqa=True)` 靠广播免物化复制。"
+    },
+    {
+      "h": "训练视角：上采样初始化",
+      "md": "GQA 论文还有个漂亮技巧：**把现成 MHA 模型改造成 GQA**，避免从头预训练。做法叫 uptraining：把 H 组 KV **平均池化成 G 组**作为初始化（相邻 4 组求均值），再拿原预训练数据的约 5% 继续训练——论文显示质量基本无损，只花原始算力的 5%。GQA 从「设计选择」变成 **retrofit 升级**。\n\n动手练习：给昨天的 LLaMABlock 加 GQA，先验证 `n_kv_head = n_head` 时与 MHA **输出逐位一致**（退化检验，最强的正确性测试）；再设 n_kv_head = n_head/4，对比 `sum(p.numel())` 应降约 wk/wv 一份。"
+    },
+    {
+      "h": "今日串联",
+      "md": "GQA 的方法论：**定位瓶颈（解码 memory-bound、KV cache 主角）→ 用共享换带宽（组内共享 KV）→ uptraining 降迁移成本**。延伸出去就是推理优化整条线：FlashAttention 做 IO 感知、PagedAttention 管碎片、量化 cache 压字节。\n\n对 Agent：长上下文多轮并发下，GQA 直接决定单卡能服务多少会话。明天把 GQA、RoPE、RMSNorm、SwiGLU 装进一个 130M 的 mini-LLaMA，完成 Phase 4 核心里程碑。"
+    }
+  ],
+  "keyPoints": [
+    "自回归解码是 memory-bound：瓶颈在 KV cache 的显存与带宽，不在算力",
+    "MHA=每 Q 头独立 KV；MQA=全模型一组 KV（快但掉点）；GQA=组内共享（快且不掉点）",
+    "GQA-8 质量≈MHA、速度接近 MQA；LLaMA 2 70B/Mistral/Qwen 均采用",
+    "实现核心：n_head % n_kv_head == 0，repeat_interleave 扩 KV 头对齐 Q 头；cache 只存 n_kv_head 份",
+    "uptraining：MHA 的 KV 平均池化成 G 组初始化 + 约 5% 预训练量继续训，迁移近乎免费",
+    "最强正确性测试：n_kv_head = n_head 时 GQA 应与 MHA 逐位一致"
+  ],
+  "quiz": [
+    {
+      "q": "自回归解码阶段的主要瓶颈是？",
+      "options": [
+        "参数矩阵乘法算力不足",
+        "KV cache 的显存占用与读写带宽（memory-bound）",
+        "softmax 数值溢出",
+        "词表 softmax 太大"
+      ],
+      "answer": 1,
+      "explain": "每步都要读整个 KV cache，算力大量闲置等数据搬运——GQA 的出发点就是缩小这份 cache。"
+    },
+    {
+      "q": "GQA-8 指的是？",
+      "options": [
+        "8 个 query 头共享 1 组 KV",
+        "把所有 query 头分成 8 组，每组共享一组 KV（KV 头数为 8）",
+        "注意力分 8 步计算",
+        "序列切成 8 段并行"
+      ],
+      "answer": 1,
+      "explain": "GQA-x 即 KV 组数为 x：G=1 是 MQA，G=H 是 MHA；GQA-8 是质量-速度的甜点位。"
+    },
+    {
+      "q": "n_head=32、n_kv_head=4、头维 128，KV cache 相比 MHA 缩小多少？",
+      "options": [
+        "不变",
+        "缩小到 1/8",
+        "缩小到 1/4",
+        "缩小到 1/32"
+      ],
+      "answer": 1,
+      "explain": "KV cache 只按 KV 头数存：4/32 = 1/8。Q 头数量不影响 cache 大小。"
+    },
+    {
+      "q": "实现 GQA 时 `repeat_interleave(g, dim=2)` 的作用是？",
+      "options": [
+        "把 Q 头复制 g 份",
+        "把 KV 头沿头维度相邻重复 g 份，使每组 g 个 Q 头对齐同一组 KV",
+        "把序列长度扩大 g 倍",
+        "把 batch 维复制 g 份"
+      ],
+      "answer": 1,
+      "explain": "KV 头数从 n_kv_head 扩到 n_head，相邻分组保证同组 Q 头看到同一份 K/V——cache 里仍只存未复制的版本。"
+    },
+    {
+      "q": "把已训练好的 MHA 模型改造成 GQA（uptraining）的初始化方法是？",
+      "options": [
+        "随机初始化 KV 投影",
+        "把每组内的 KV 投影权重平均池化作为初始，再用约 5% 预训练量继续训练",
+        "直接复制第一组 KV 给所有组",
+        "冻结全部参数只调学习率"
+      ],
+      "answer": 1,
+      "explain": "均值池化保留原模型知识分布，少量继续训练即可恢复质量，总成本约为从头预训练的 5%。"
+    },
+    {
+      "q": "GQA 实现正确性最强的测试是？",
+      "options": [
+        "loss 能下降",
+        "n_kv_head = n_head 时输出与 MHA 逐位一致（退化检验）",
+        "参数量恰好减半",
+        "推理速度提升 32 倍"
+      ],
+      "answer": 1,
+      "explain": "GQA 在 G=H 时数学上就是 MHA；逐位一致说明形状对齐、分组逻辑与投影都写对了。"
+    }
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "day": 59,
+  "title": "Seq2Seq + 机器翻译",
+  "sections": [
+    {
+      "h": "新任务：变长到变长的映射",
+      "md": "语言模型是「续写」，翻译是「改写」：输入一句英文（长度不定），输出一句德文（长度也不定，无位置对应）。前几天的组件都是现成的，缺一个**把两个序列接起来的架构**。\n\n2014 年 Sutskever 等人的 Seq2Seq 给出经典答案：**编码器把整句压缩成一个向量，解码器从这个向量生成目标句**。Encoder-Decoder 范式影响远超翻译——摘要、对话、语音识别，直到 GPT 的「提示 + 生成回答」。今天用 LSTM 实现它，明天装上注意力。"
+    },
+    {
+      "h": "架构：编码器压扁，解码器展开",
+      "md": "**编码器**：一个 LSTM 逐词读入源句，取最后的隐状态 (h, c)——**句子向量**，整句语义的压缩摘要。\n\n**解码器**：另一个 LSTM。第一拍吃 `<bos>`，**初始状态直接设为编码器的最终状态**——两网间唯一接口。之后每步吃自己上一步的预测，直到 `<eos>`。\n\n训练与推理行为不同，这是 Seq2Seq 第一个易混点：\n\n- **训练（Teacher Forcing）**：解码器每步输入用**真实答案**的前一个词，不用自己的预测。好处：梯度稳定、收敛快。缺点：训练永远走「正确路径」，推理没有老师，小错误滚雪球——暴露偏差（exposure bias），可用 scheduled sampling（训练中按概率换成自己的采样）缓解\n- **推理（自回归）**：每步吃自己的上一步输出，直到 `<eos>`"
+    },
+    {
+      "h": "PyTorch：英德翻译 toy demo",
+      "md": "数据用 Multi30k（英→德，约 2.9 万句对）。编码器与 Day 58 的 CharLSTM 同构（Embedding + LSTM，返回最终 state），展示解码器与训练：\n\n```python\nclass Decoder(nn.Module):\n    def __init__(self, v_out, emb=128, hid=256):\n        super().__init__()\n        self.emb = nn.Embedding(v_out, emb)\n        self.rnn = nn.LSTM(emb, hid, batch_first=True)\n        self.head = nn.Linear(hid, v_out)\n\n    def forward(self, y_prev, state):\n        out, state = self.rnn(self.emb(y_prev), state)\n        return self.head(out), state\n```\n\n训练一步（PAD/BOS/EOS = 0/1/2；句子已 pad，损失用 `ignore_index` 屏蔽）：\n\n```python\ndef train_step(enc, dec, src, trg, opt):\n    state = enc(src)\n    # Teacher Forcing：输入 = <bos> + trg[:-1] 整段并行\n    inp = torch.cat([torch.full((len(trg),1), BOS), trg[:, :-1]], 1)\n    logits, _ = dec(inp, state)\n    loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)),\n                           trg.reshape(-1), ignore_index=PAD)\n    opt.zero_grad(); loss.backward()\n    nn.utils.clip_grad_norm_([*enc.parameters(), *dec.parameters()], 1.0)\n    opt.step(); return loss.item()\n```\n\n漂亮细节：训练输入全是真实词，LSTM 前向可**整句一次算完**——只有推理才逐步。Teacher Forcing 不只稳定训练，还保住并行性。"
+    },
+    {
+      "h": "推理：自回归生成与贪心 / beam search",
+      "md": "翻译时没有标准答案可喂，解码器逐步生成：\n\n```python\n@torch.no_grad()\ndef translate(enc, dec, src, max_len=50):\n    state = enc(src); ys = torch.full((1,1), BOS)\n    for _ in range(max_len):\n        logits, state = dec(ys[:, -1:], state)\n        nxt = logits[:, -1].argmax(-1)   # 贪心：每步取最大概率词\n        if nxt.item() == EOS: return ys[0, 1:].tolist()\n        ys = torch.cat([ys, nxt.view(1,1)], 1)\n```\n\n每步取 argmax 是**贪心解码**；更优的是 **beam search**：同时维护 k 条最优前缀（束宽常用 4–8），最后取累计对数概率最高的完整句。贪心「每步选眼前最好」，beam「保留可能再回看全局」。toy 用贪心足够，生产都用 beam。"
+    },
+    {
+      "h": "瓶颈与 LLM 关联",
+      "md": "Seq2Seq 的阿喀琉斯之踵在架构里已注定：**整句压进一个固定维向量**。短句够用；句子一长（30 词以上），翻译质量断崖式下降——不管 LSTM 多大。信息论的硬约束，调参救不了。\n\n接力：LSTM 解决「记不长」，Seq2Seq 解决「装不进一个框架」，还剩「读不全」——明天 Bahdanau 注意力让解码器每个词**回头看源句所有位置**。Day 61–62 它升级为 self-attention 就是 Transformer；Encoder-Decoder 骨架至今仍是翻译、Whisper 等一切「理解输入再生成输出」模型的标准形态。"
+    }
+  ],
+  "keyPoints": [
+    "Seq2Seq = 编码器压成句子向量 + 解码器自回归生成，接口仅是 LSTM 最终 (h, c)",
+    "训练用 Teacher Forcing（喂真实前词，稳定且可整句并行），推理自回归逐步喂自己的输出",
+    "暴露偏差：训练永远走正确路径、推理错误滚雪球；scheduled sampling 缓解",
+    "损失用 ignore_index 屏蔽 pad；梯度裁剪仍是标配",
+    "固定维句子向量是长句翻译的硬瓶颈 → 引出明天的注意力"
+  ],
+  "quiz": [
+    {
+      "q": "编码器与解码器之间传递的信息是？",
+      "options": ["源句每个词的 embedding", "编码器 LSTM 的最终 (h, c) 状态，作为解码器的初始状态", "目标句的长度", "词表统计"],
+      "answer": 1,
+      "explain": "Seq2Seq 的唯一接口就是编码器读完源句后的最终隐状态，整句语义被压缩在其中，解码器从这里开始生成。"
+    },
+    {
+      "q": "Teacher Forcing 指的是？",
+      "options": ["用更大的批训练", "训练时解码器每步输入真实答案的上一个词而非模型自己的预测", "强制教师模型与学生模型对齐", "把梯度强制清零"],
+      "answer": 1,
+      "explain": "喂真实前词让训练信号稳定、收敛快；代价是训练分布与自回归推理不一致，产生暴露偏差。"
+    },
+    {
+      "q": "Teacher Forcing 给 LSTM 实现带来的一个意外好处是？",
+      "options": ["可以使用 SGD", "解码器可以整句一次性前向计算，不必逐步循环", "不需要编码器", "不需要 <eos> 符号"],
+      "answer": 1,
+      "explain": "训练时输入序列完全已知（<bos> + trg[:-1]），整个目标句可一次喂给 LSTM 并行计算所有步的 logits。"
+    },
+    {
+      "q": "贪心解码与 beam search 的区别是？",
+      "options": ["贪心每步取概率最大的词；beam 同时维护 k 条候选前缀，最后取累计概率最高的完整句", "贪心更快更准；beam 只用于训练", "两者完全相同", "beam search 不需要 <eos>"],
+      "answer": 0,
+      "explain": "贪心短视，局部最优可能拼出全局差句；beam 保留多种可能并按累计对数概率全局比较，生成质量通常更高。"
+    },
+    {
+      "q": "Seq2Seq 翻译长句质量骤降的根本原因是？",
+      "options": ["LSTM 梯度消失导致训练失败", "整句语义必须压进固定维度的单一向量，长句信息超过容量", "beam 宽度不够", "词表太大"],
+      "answer": 1,
+      "explain": "无论模型多大，信息瓶颈是一个固定维向量；这不是优化问题而是架构的信息论限制，注意力机制正是为拆掉这个瓶颈而生。"
+    },
+    {
+      "q": "以下哪个系统最直接继承了 Encoder-Decoder 范式？",
+      "options": ["图像分类 ResNet", "Whisper 语音识别（音频编码器 + 文本解码器）", "随机森林", "K-Means 聚类"],
+      "answer": 1,
+      "explain": "「编码一段输入、解码出一段变长输出」正是 Seq2Seq 骨架，Whisper、翻译模型、摘要模型都属此列。"
+    }
+  ]
+}

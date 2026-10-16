@@ -1,0 +1,67 @@
+{
+  "day": 115,
+  "title": "vLLM 部署 mini-LLaMA",
+  "sections": [
+    {
+      "h": "五分钟起一个服务",
+      "md": "选一个小模型（如 Llama-3.2-1B）把端到端链路跑通：\n\n```bash\npip install vllm\nvllm serve meta-llama/Llama-3.2-1B \\\n  --max-model-len 4096 \\\n  --gpu-memory-utilization 0.9 \\\n  --max-num-seqs 256\n```\n\nvLLM 起的是**OpenAI 兼容 API**，任何 OpenAI SDK / curl 都能直接打：\n\n```bash\ncurl http://localhost:8000/v1/chat/completions \\\n  -d '{\"model\": \"meta-llama/Llama-3.2-1B\", \"messages\": [{\"role\": \"user\", \"content\": \"用一句话解释 KV cache\"}]}'\n```\n\n关键启动参数：\n\n| 参数 | 作用 |\n|---|---|\n| `--gpu-memory-utilization` | 权重 + KV block 池的总显存占比，直接决定并发预算 |\n| `--max-model-len` | 单请求最大上下文，影响 KV 预算与截断行为 |\n| `--max-num-seqs` | 同时解码的最大序列数（并发上限） |\n| `--enable-prefix-caching` | 开启前缀块复用（新版本多为默认开） |\n\n> 先起服务再谈优化：没有可复现的部署，就没有可比较的数字。"
+    },
+    {
+      "h": "先搞清楚测什么：四个指标",
+      "md": "推理性能不是一句『快』，四个量必须分开：\n\n1. **TTFT**（time to first token）：从发出请求到收到第一个 token 的延迟。由 prefill 计算 + 排队时间构成\n2. **TPOT / ITL**（time per output token）：首 token 之后每个 token 的平均间隔，决定『打字机速度』\n3. **request throughput**（req/s）：每秒完成的请求数\n4. **output token throughput**（tok/s）：每秒产出的总 token 数\n\n注意 request throughput 强烈依赖平均生成长度——两条服务线比较时，**统一看 tok/s 才公平**。\n\n再引入 SLO 视角：真实产品定义『好』为『TTFT < 500ms 且 TPOT < 50ms』这类约束，满足 SLO 的吞吐叫 **goodput**——这才是服务容量规划的目标，而不是裸吞吐。交互式场景（聊天）与离线场景（批量标注）的优化方向完全不同：前者盯延迟，后者盯吞吐。"
+    },
+    {
+      "h": "benchmark：吞吐量 + 首 token 延迟",
+      "md": "用 vLLM 仓库自带的压测脚本，配上 ShareGPT 格式的真实请求分布：\n\n```bash\npython benchmarks/benchmark_serving.py \\\n  --model meta-llama/Llama-3.2-1B \\\n  --dataset-name sharegpt \\\n  --request-rate 4 --num-prompts 200\n```\n\n输出会给出 successful requests、request throughput、output token throughput、mean/median/P99 TTFT、TPOT 等。做三组对照实验：\n\n- 改 `--request-rate`（1 / 4 / 16）：观察低并发时延迟低、高并发时排队导致 TTFT 与 TPOT 恶化、吞吐先升后饱和\n- 开关 prefix caching：系统提示重复的负载下 TTFT 明显下降\n- 改 `--max-num-seqs`：并发上限提高 → 吞吐上升，但单请求 TPOT 变差（带宽被更多序列分摊）\n\n这就是你后面读任何推理论文 benchmark 的通用姿势：**固定负载分布，一次只动一个变量**。"
+    },
+    {
+      "h": "读数背后的原理",
+      "md": "把数字接回 Day 113 的两阶段模型：\n\n- **TTFT ≈ 排队 + prefill**。prefill 是计算密集的，batch 一起算几乎白赚；排队则取决于并发与调度。长 prompt 是 TTFT 杀手——几百 K token 的请求会霸占 GPU 一段时间，这正是 **chunked prefill**（把长 prefill 切块、穿插 decode 迭代）存在的原因\n- **TPOT 由访存决定**：每步读全部权重 + 各序列的 KV，带宽被 batch 内序列摊薄。所以吞吐随并发先线性上升（带宽利用率提高）、到带宽打满后 TPOT 开始上升\n- **吞吐上限**可以用 Day 113 的公式粗估：tokens/s ≈ 有效带宽 ÷（权重 + 平均 KV × 并发）\n\n调参直觉由此而来：延迟不行 → 降并发 / 开 chunked prefill / 提速 prefill；吞吐不行 → 提并发、开 prefix caching、量化权重减少每步读取。"
+    }
+  ],
+  "keyPoints": [
+    "vllm serve 起的是 OpenAI 兼容 API；--gpu-memory-utilization 决定 KV block 池即并发预算",
+    "四个指标必须分开：TTFT、TPOT、request throughput（req/s）、output token throughput（tok/s）",
+    "跨服务比较吞吐统一用 tok/s；产品容量规划用 goodput（满足 SLO 的吞吐）",
+    "TTFT ≈ 排队 + prefill（计算密集）；TPOT 由访存带宽决定——调参方向完全不同",
+    "压测方法论：固定负载分布（sharegpt），一次只动一个变量"
+  ],
+  "quiz": [
+    {
+      "q": "用户反馈『回答很流畅但等第一字很久』，最可能恶化的指标是？",
+      "options": ["TTFT（排队或长 prefill 拖累）", "TPOT", "权重加载时间", "tokenizer 词表大小"],
+      "answer": 0,
+      "explain": "流畅说明 TPOT 正常；首字慢是 TTFT 问题，来源通常是排队或超长 prompt 的 prefill，对策是 chunked prefill 与并发控制。"
+    },
+    {
+      "q": "两条服务线 A 平均每请求生成 50 token、B 平均 500 token，比较原始吞吐应该看？",
+      "options": ["output token throughput（tok/s）", "request throughput（req/s）", "GPU 利用率", "模型参数量"],
+      "answer": 0,
+      "explain": "request throughput 被生成长度强耦合：同样 tok/s 下 B 的 req/s 天然只有 A 的 1/10。公平比较要看每秒产出的 token 数。"
+    },
+    {
+      "q": "把 --max-num-seqs 调大，典型现象是？",
+      "options": ["总吞吐上升，但单请求 TPOT 变差（带宽被更多序列摊薄）", "TTFT 必然下降", "显存占用下降", "精度下降"],
+      "answer": 0,
+      "explain": "并发提高摊薄了每步的权重读取，吞吐先升后随带宽打满而饱和；但每条序列分到的带宽变少，token 间隔变长。延迟与吞吐是同一枚硬币的两面。"
+    },
+    {
+      "q": "高并发下 TTFT 快速恶化，最直接的原因是？",
+      "options": ["请求排队等待可用 slot / KV block", "分词器变慢", "权重被反复从磁盘加载", "GPU 主频下降"],
+      "answer": 0,
+      "explain": "并发超过 --max-num-seqs 或 KV block 池耗尽时，新请求只能排队；prefill 本身是计算密集的，排队才是 TTFT 的主要成分。"
+    },
+    {
+      "q": "prefix caching 对哪类负载收益最大？",
+      "options": ["大量请求携带相同系统提示的多轮 chat 服务", "每次输入完全随机的基准测试", "单条长文档摘要", "批量预训练"],
+      "answer": 0,
+      "explain": "前缀相同才能命中已算好的 KV 物理块，prefill 从重算整段提示变成只算新增部分；随机前缀的负载几乎无命中。"
+    },
+    {
+      "q": "离线批量标注任务最该优先优化的指标是？",
+      "options": ["总 output token throughput（可牺牲 TTFT）", "P99 TTFT", "单请求 TPOT 必须压到 20ms 以下", "显存占用必须最小"],
+      "answer": 0,
+      "explain": "离线场景用户不在线等，延迟 SLO 宽松，应尽量拉高并发换吞吐；交互式场景才需要为 TTFT/TPOT 付吞吐代价。"
+    }
+  ]
+}

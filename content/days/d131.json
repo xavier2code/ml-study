@@ -1,0 +1,71 @@
+{
+  "day": 131,
+  "title": "Agent 框架概览 (LangChain / LangGraph / AutoGen)",
+  "sections": [
+    {
+      "h": "直觉：框架解决什么问题",
+      "md": "裸写一个 Agent 循环其实只要 20 行：while 未完成 → LLM 决定动作 → 执行工具 → 把结果塞回上下文。那为什么需要框架？因为**产品化的 Agent 麻烦在循环之外**：\n\n- prompt 与工具定义的拼装、消息历史裁剪\n- 状态持久化、断点恢复、人工介入\n- 多 Agent 协作、重试、超时\n- 可观测：每步输入输出留痕、token 计费\n\n框架 = 把这些「胶水」标准化。但胶水太厚也会坏事——黑盒、难调、抽象税。今天的目标是**都摸一遍，知道各自适合什么**，Phase 5 再深入选型。"
+    },
+    {
+      "h": "LangChain：组件最全的百货商店",
+      "md": "LangChain 是最大的 LLM 应用生态：数百个集成（模型 API、向量库、工具）、Chain/Runnable 抽象、LCEL 声明式管道。\n\n**强项**：集成覆盖面第一；文档和社区案例最多；RAG 相关组件（loader/splitter/retriever）成熟。\n\n**代价**：抽象层多，版本迭代快，历史上 API 频繁破坏性变更；简单需求也容易被拉进它的抽象体系。「LangChain 写 demo 很快，写生产要克制」是社区共识——很多团队只用它的集成层，编排逻辑自己写。\n\n适合：原型验证、需要快速接各种外部组件的场景。"
+    },
+    {
+      "h": "LangGraph：显式状态机，为可控 Agent 而生",
+      "md": "LangGraph（同团队）把 Agent 看成**图/状态机**：节点是步骤（调 LLM、跑工具、人工审核），边是转移，状态是一个显式的 TypedDict，全部对开发者可见。\n\n```\n[Sagent] ──调用工具──> [tool] ──结果──> [sagent]\n    │                         │\n    └────── 完成/中断/人工介入 ──┘\n```\n\n**强项**：状态显式可控（每步能检查、修改、回滚）；循环与条件分支是一等公民；内置 checkpointing——任意节点可暂停、持久化、恢复，人工审批节点即插即用；可精细控制每步重试与超时。\n\n**代价**：上手比 LangChain 陡，图结构要自己设计。\n\n适合：生产级复杂 Agent、需要人机协作（human-in-the-loop）的工作流、要审计每一步的合规场景。与 Day 130 呼应：**动作护栏在图里就是一个显式节点**，天然可插。"
+    },
+    {
+      "h": "AutoGen：多 Agent 对话编排",
+      "md": "AutoGen（微软）的抽象单位是**会话**：多个各有人设/工具的 Agent 互相对话完成任务——执行者写代码、评审者挑错、直到共识或轮次上限。\n\n**强项**：多角色协作开箱即用（coder/reviewer/planner 模板）；「对话即协作」的心智模型直观；代码执行沙箱集成好。\n\n**代价**：多 Agent 对话 = 多倍 token 成本与更难调试的轨迹；何时停止、如何聚合结论需要设计；单 Agent 任务用它属于高射炮打蚊子。\n\n| | LangChain | LangGraph | AutoGen |\n|---|---|---|---|\n| 核心抽象 | Chain/Runnable | 图/状态机 | 多 Agent 会话 |\n| 最适合 | 原型、RAG、集成密集 | 生产可控 Agent、人机协作 | 多角色协作任务 |\n| 可控性/可审计 | 中 | 高 | 中 |\n| 上手成本 | 低 | 中高 | 中 |\n\n选型口诀：**要快接组件用 LangChain，要可控生产用 LangGraph，要多角色头脑风暴用 AutoGen**——三者不互斥，LangGraph 常与 LangChain 集成层搭配。"
+    },
+    {
+      "h": "实战：三个 hello world + 与 Phase 5 的衔接",
+      "md": "每个框架跑通一个最小 Agent（模型可用本地 llama.cpp 的 OpenAI 兼容接口，正好复用 Day 128）：\n\n```python\n# LangGraph 最小循环（示意骨架）\nfrom langgraph.prebuilt import create_react_agent\nagent = create_react_agent(model, tools=[search, calculator])\nresult = agent.invoke({\"messages\": [(\"user\", \"当前 BTC 价格的平方根?\")]})\n```\n\n```python\n# AutoGen 双 Agent（示意骨架）\ncoder = AssistantAgent(\"coder\", llm_config=cfg)\nreviewer = UserProxyAgent(\"reviewer\", code_execution_config={})\ncoder.initiate_chat(reviewer, message=\"写一个统计词频的脚本并自查\")\n```\n\n观察清单（比跑通更重要）：\n\n1. 每轮循环的完整 prompt 长什么样（打印发送给 LLM 的原始消息）——你会看到工具定义与历史如何被拼进去\n2. 一轮失控循环时框架各自怎么终止（最大轮次？超时？）\n3. 消息历史如何增长、何时裁剪——这决定长任务的 token 成本\n\nPhase 5 你将选一个框架实现完整项目（如自动调研 Agent、代码修复 Agent）。今天的三个 hello world 就是选型投票的依据。"
+    }
+  ],
+  "keyPoints": [
+    "Agent 核心循环只有 20 行，框架的价值在循环之外：持久化、恢复、人工介入、多 Agent、可观测",
+    "LangChain 组件与集成最全，适合原型和 RAG；抽象税高、API 迭代快是代价",
+    "LangGraph 用显式状态机建模 Agent，状态可控、checkpoint/人工介入内置，适合生产与人机协作",
+    "AutoGen 以多 Agent 对话为核心抽象，多角色协作开箱即用，但 token 成本与调试难度更高",
+    "跑 hello world 时盯三件事：原始 prompt 长什么样、失控如何终止、历史如何裁剪"
+  ],
+  "quiz": [
+    {
+      "q": "「裸写 Agent 循环只要 20 行，为什么还要框架」最好的回答是？",
+      "options": ["框架代码更少", "产品化的难点在循环之外：状态持久化、断点恢复、人工介入、多 Agent 协作与可观测性", "框架的模型更强", "不用框架无法调用 API"],
+      "answer": 1,
+      "explain": "循环本身简单，胶水工程才是成本大头；框架标准化这些胶水——但也要为抽象层支付理解和调试成本。"
+    },
+    {
+      "q": "为什么说 LangGraph 特别适合「动作护栏」这类安全设计？",
+      "options": ["它内置了安全审查模型", "Agent 是显式图结构，护栏可以作为一个显式节点插在工具调用之前，可审计可测试", "它的 prompt 更安全", "它不支持工具调用"],
+      "answer": 1,
+      "explain": "图上每个节点都是可见、可插拔的步骤：在工具节点前加一个校验节点，人工审批节点同理——确定性防线融入结构而非散落在 prompt 里。"
+    },
+    {
+      "q": "AutoGen 的核心抽象是什么？",
+      "options": ["Chain 管道", "图/状态机", "多 Agent 会话（各有人设与工具的角色互相对话协作）", "向量数据库"],
+      "answer": 2,
+      "explain": "AutoGen 以「会话」为一等公民：coder、reviewer 等角色通过多轮对话推进任务，协作模板开箱即用。"
+    },
+    {
+      "q": "一个需要「每步可审计 + 人工审批高风险操作」的生产 Agent，首选哪个框架？",
+      "options": ["LangChain（生态最大）", "LangGraph（显式状态机 + 内置 checkpoint 与 human-in-the-loop）", "AutoGen（多角色）", "都不行，必须自研"],
+      "answer": 1,
+      "explain": "LangGraph 的状态显式化、节点级持久化与暂停恢复正是为可审计、可人工介入的生产工作流设计的。"
+    },
+    {
+      "q": "跑通框架 hello world 后，最值得花时间观察的是什么？",
+      "options": ["安装耗时", "每轮发送给 LLM 的完整 prompt、失控循环的终止机制、消息历史的裁剪策略", "UI 主题", "包体积大小"],
+      "answer": 1,
+      "explain": "这三点分别决定：模型实际看到什么（效果）、失败时的安全网（可靠性）、长任务成本（经济）——是框架选型的硬指标。"
+    },
+    {
+      "q": "「LangChain 写 demo 快、写生产要克制」指什么？",
+      "options": ["LangChain 不能用于生产环境", "它集成丰富但抽象层多、API 迭代快，生产中常只用其集成层、编排自己控制", "它运行速度太慢", "它不支持中文"],
+      "answer": 1,
+      "explain": "抽象税：快速拼装的好处伴随黑盒与破坏性变更风险；生产常见做法是复用集成层、把核心编排逻辑留在自己手里（或换 LangGraph）。"
+    }
+  ]
+}

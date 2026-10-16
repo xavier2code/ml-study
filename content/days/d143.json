@@ -1,0 +1,71 @@
+{
+  "day": 143,
+  "title": "Multi-Agent 编排 (LangGraph)",
+  "sections": [
+    {
+      "h": "直觉：从面条代码到状态机",
+      "md": "昨天的 planner/executor 循环写到第三个角色就开始缠成面条：谁在什么时候被调用、状态存哪、失败从哪重试——全埋在 if/for 里。\n\n**LangGraph** 的答案：把 Agent 系统画成一张**状态机图**——\n\n- **节点（node）**：一个函数或一个 LLM 调用（planner、executor、critic……）\n- **边（edge）**：控制流（planner → executor，或条件跳转）\n- **状态（state）**：一个共享的字典/对象，每个节点读写它\n\n代码变成「声明式的图」，控制流一眼可见；「可重试」「可中断」「可回放」这些能力都由图运行时统一提供。"
+    },
+    {
+      "h": "机制：State、Node、条件边",
+      "md": "LangGraph 三要素，一个例子讲透。先定义状态：\n\n```python\nfrom typing import TypedDict\n\nclass AgentState(TypedDict):\n    messages: list      # 对话/工具消息\n    plan: list          # 当前计划\n    next: str           # 下一个该谁干活\n```\n\n节点就是「吃状态、吐状态更新」的函数；**条件边**根据状态决定路由：\n\n```python\nbuilder = StateGraph(AgentState)\nbuilder.add_node(\"planner\", plan_node)\nbuilder.add_node(\"researcher\", research_node)\nbuilder.add_node(\"writer\", write_node)\nbuilder.set_entry_point(\"planner\")\nbuilder.add_conditional_edges(\n    \"planner\",\n    route,                       # 函数：返回 \"researcher\" 或 \"writer\"\n    {\"researcher\": \"researcher\", \"writer\": \"writer\"})\ngraph = builder.compile()\n```\n\n**Supervisor 模式**：再加一个 supervisor 节点，每轮读 `messages`，决定 `next` 是谁——这就是多 Agent 协作最常用的调度形态：主管派活，干活的汇报，主管再派。"
+    },
+    {
+      "h": "例子：3-agent 协作系统",
+      "md": "搭一个「研究员 + 撰稿人 + 审稿人」小队，回答开放研究题：\n\n| 节点 | 职责 | 工具 |\n|---|---|---|\n| researcher | 检索资料、核实事实 | 你 Day 140 的 RAG 服务 |\n| writer | 组织成结构化回答 | 无 |\n| reviewer | 挑错：事实、逻辑、格式 | 无 |\n\n```text\nsupervisor → researcher → supervisor → writer\n          → reviewer → (不合格) → writer → (合格) → END\n```\n\n运行时要点：\n\n1. **supervisor 输出结构化路由**（直接吐 JSON `{\"next\": \"writer\"}`），比自由文本再解析可靠\n2. **reviewer 不合格要带理由**写回 state，writer 才知道改什么\n3. 加一个**循环计数器**放 state 里，审稿最多 2 轮，防止 reviewer/writer 无限拉扯\n\n这就是「你目标里的核心」：LangGraph 的 checkpointing 还能把整个 state 存盘，随时暂停恢复——demo 时中途打断再继续毫无压力。"
+    },
+    {
+      "h": "与 LLM/Agent 的关联",
+      "md": "为什么多 Agent？单个 Agent 上下文有限、角色易混：又当研究员又当审稿人，prompt 撑爆还互相干扰。拆成多个小 Agent，每个上下文干净、可独立换模型、独立测试。\n\n对照路线图：明天 Day 144 的 function calling 是 researcher 节点内部调工具的标准协议；Day 145 Langfuse 会对图里**每个节点**做 trace；Day 146 的评估要分别测三个角色。你在 nanoGPT 里学过的「模块化分层」，在 Agent 世界换了个名字叫「编排」。\n\n> 记忆点：**多 Agent 的本质不是模型多，而是上下文分工**。"
+    },
+    {
+      "h": "今日练习",
+      "md": "1. 用 LangGraph 搭上面 3-agent 系统，researcher 接你的 RAG 服务\n2. 追加一个 fact-checker：对 writer 输出的每条引用做核验，不实打回\n3. 用 checkpointing 实测：运行到一半 kill 掉进程，从 checkpoint 恢复继续\n\n明日预告：节点内部怎么规范地调工具——Function Calling 协议。"
+    }
+  ],
+  "keyPoints": [
+    "LangGraph 三要素：共享 State、Node（函数/LLM 调用）、Edge（含条件边路由）",
+    "Supervisor 模式：主管节点读状态决定 next，是多 Agent 调度最常用形态",
+    "多 Agent 的本质是上下文分工：每个 agent 上下文干净、可独立换模型与测试",
+    "防无限循环：state 里放循环计数器，review 轮数封顶",
+    "checkpointing 让整图可暂停恢复——调试和 demo 的利器"
+  ],
+  "quiz": [
+    {
+      "q": "LangGraph 中「节点（node）」的本质是？",
+      "options": ["一台服务器", "一个函数或 LLM 调用：读共享状态、返回状态更新", "一个 prompt 模板", "一种模型架构"],
+      "answer": 1,
+      "explain": "节点是状态转换函数；控制流由边决定——把逻辑从 if/for 面条里解放出来，变成可声明的图。"
+    },
+    {
+      "q": "条件边（conditional edges）的作用是？",
+      "options": ["并行执行所有分支", "根据当前状态动态决定下一个节点（如审稿通过去 END，不通过回 writer）", "加密传输", "加速推理"],
+      "answer": 1,
+      "explain": "条件边 = 路由函数返回目标节点名，是多 Agent 系统里 supervisor 派活、审稿打回的实现基础。"
+    },
+    {
+      "q": "为什么把单 Agent 拆成研究员/撰稿人/审稿人三个？核心原因是？",
+      "options": ["三个模型更便宜", "上下文分工：各角色上下文干净不互相污染，且可独立换模型和测试", "LangGraph 强制要求至少三个节点", "为了并行加速"],
+      "answer": 1,
+      "explain": "单 Agent 身兼数职时 prompt 膨胀、职责互相干扰；拆开后每个上下文聚焦本职，故障还能定位到具体角色。"
+    },
+    {
+      "q": "reviewer 节点打回稿子时，state 里最应该带上什么？",
+      "options": ["只写「不合格」", "不合格的具体理由（哪条事实有误、缺什么结构），供 writer 针对性修改", "完整原始语料", "reviewer 自己重写的稿子"],
+      "answer": 1,
+      "explain": "反馈要可执行：带理由的打回让 writer 知道改什么；只说不行会引发无意义的反复重写。"
+    },
+    {
+      "q": "防止 reviewer/writer 无限互相打回的正确做法是？",
+      "options": ["永远相信 reviewer", "在 state 里加循环计数器，review 轮数封顶（如 2 轮）后强制结束", "删掉 reviewer", "每轮换一个新模型"],
+      "answer": 1,
+      "explain": "和昨天 ReAct 的 MAX_STEPS 一样：Agent 系统里所有循环都必须有保险丝，封顶后可转人工或直接输出当前最好版本。"
+    },
+    {
+      "q": "LangGraph 的 checkpointing 最大的实用价值是？",
+      "options": ["让模型更聪明", "整个图的状态可存盘，随时暂停、恢复、回放调试", "减少 token 消耗", "自动并行化"],
+      "answer": 1,
+      "explain": "长流程 Agent 中断后不必从头再来；调试时还能逐步回放状态，定位是哪个节点出了问题。"
+    }
+  ]
+}

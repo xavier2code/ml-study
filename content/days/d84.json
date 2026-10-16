@@ -1,0 +1,90 @@
+{
+  "day": 84,
+  "title": "Week 12 复盘 + 整理 nanoGPT 框架",
+  "sections": [
+    {
+      "h": "Week 12 复盘：组件都齐了",
+      "md": "本周（Day 79–83）你拆完了 Transformer 的最后几个组件，并用一张表收束：\n\n| 主题 | 核心结论 | 亲手做过 |\n|---|---|---|\n| FFN | 占参数 2/3；GELU→SwiGLU→MoE 演化 | SwiGLU + 简化 MoE 实现 |\n| 归一化 | RMSNorm 砍均值砍 β，Pre-Norm 稳训练 | 手写 RMSNorm + 对比测速 |\n| Tokenizer | byte-level BPE，压缩率决定上下文利用率 | 中文语料训练 merge 规则 |\n| 手写 tokenizer | encode 按 rank 贪心、decode 防坏字节 | 不调包完整实现 + tiktoken 对齐 |\n| 架构 | 掩码决定信息流：BERT/GPT/T5 | 对比图 |\n\n自检标准：合上笔记，能白板写出 SwiGLU 公式、RMSNorm 公式、BPE 每轮做什么、三种架构的预训练目标。卡壳的地方今天补齐——这些是下周组装 mini-GPT 的全部零件。"
+    },
+    {
+      "h": "跑通 nanoGPT",
+      "md": "Karpathy 的 nanoGPT（约 300 行 train.py + 300 行 model.py）是练习 GPT 的最佳脚手架。两小时目标：完整跑通字符级莎士比亚：\n\n```\ngit clone https://github.com/karpathy/nanoGPT\ncd nanoGPT\npip install torch numpy transformers datasets tiktoken wandb tqdm\npython data/shakespeare_char/prepare.py\npython train.py config/train_shakespeare_char.py\npython sample.py --out-dir=out-shakespeare-char\n```\n\n几分钟内（笔记本 CPU 也可，约几分钟到几十分钟）即可看到模型从随机字符吐出像样的伪莎士比亚。看日志逐项理解：`train loss` 与 `val loss` 的分离意味着过拟合开始；`iter` 与 `lr` 的余弦衰减；meta 里的 vocab_size 是字符级（65）而非 BPE。\n\n**先跑通再读代码**——有可复现的锚点，读代码时每个变量都有了体温。"
+    },
+    {
+      "h": "model.py 导览：对照你手写过的组件",
+      "md": "`model.py` 的 GPT 类分四块，全部对应你本周的产出：\n\n1. **CausalSelfAttention**：Q/K/V 投影 + `F.scaled_dot_product_attention`（内置 causal mask 与 FlashAttention 路径）+ 输出投影\n2. **MLP**：`4d → GELU → d` 的两层 FFN——正是你 Day 79 第一节的「传统版」，今天你知道怎么换成 SwiGLU\n3. **Block**：`x = x + attn(ln_1(x)); x = x + mlp(ln_2(x))`——**Pre-Norm**，Day 80 讲过为什么；把 `nn.LayerNorm` 换成你的 RMSNorm 即得 LLaMA 风格\n4. **组装**：token embedding `wte` + 位置 embedding `wpe` → n_layer 个 Block → `ln_f` → `lm_head`；`weight tying` 可让 lm_head 与 wte 共享权重\n\n练习：在 config 里把 `n_layer/n_head/n_embd` 各改一档重新训练，观察容量对损失的影响。"
+    },
+    {
+      "h": "手画 GPT-2 Block 结构图",
+      "md": "合上代码，手画完整数据流（纸笔最有效，2 小时含核对）：\n\n```\nids (B,T)\n  → wte 查表 (B,T,d) ＋ wpe 位置 (B,T,d)\n  ┌────────── Block ×n_layer ──────────┐\n  │ x → LN → CausalSelfAttention ─＋  │   残差\n  │ x → LN → MLP(4d, GELU)       ─＋  │   残差\n  └───────────────────────────────────┘\n  → ln_f → lm_head → logits (B,T,V)\n```\n\n画图时逐处标注张量形状（B=batch，T=序列长，d=768，V=50257），并回答三个问题：causal mask 在图上哪一步生效？（注意力内部 softmax 前。）残差线为什么要直通？（Pre-Norm 保梯度。）GELU 在 MLP 的哪一层之后？（升维投影后、降维投影前。）\n\n核对方法：对着 model.py 从 forward 入口逐步检查自己的图，漏一处回来补一处——这张图就是下周 mini-GPT 的施工蓝图。"
+    },
+    {
+      "h": "下一步：从读框架到组模型",
+      "md": "本周完成了从「理解组件」到「看懂完整训练系统」的跨越：nanoGPT 的 prepare→train→sample 三段就是数据、优化、推理的最小闭环。\n\n接下来一周的主线：**组装与改造你自己的 mini-GPT**——用你手写的 RMSNorm、SwiGLU 替换 Block 内组件，用你的 BPE tokenizer 替换字符级词表，再进入数据流水线（清洗、去重、DataLoader 优化）——模型的天花板在数据，明后天专攻它。\n\n> 复盘清单：白板公式 4/4 会写？nanoGPT 跑通且能 sample？结构图合书可画？三问皆「是」才进入下周。"
+    }
+  ],
+  "keyPoints": [
+    "nanoGPT 三段式：prepare（数据→bin）→ train（AdamW+余弦退火）→ sample（自回归生成）",
+    "Block 结构：Pre-Norm 残差，x + attn(ln_1(x)) 再 x + mlp(ln_2(x))",
+    "model.py 四件套：CausalSelfAttention / MLP(4d+GELU) / Block / wte+wpe+lm_head 组装",
+    "weight tying：lm_head 与 wte 共享权重，省 V×d 参数",
+    "画结构图要标张量形状 (B,T,d,V)，能指出 causal mask 与 GELU 的位置"
+  ],
+  "quiz": [
+    {
+      "q": "nanoGPT 的 Block 采用什么归一化布局？",
+      "options": [
+        "Post-Norm：LN(x + attn(x))",
+        "Pre-Norm：x + attn(LN(x))，残差主路无变换",
+        "不加归一化",
+        "BatchNorm"
+      ],
+      "answer": 1,
+      "explain": "GPT-2 起统一 Pre-Norm：归一化放在残差分支内部，主干恒等，深模型梯度直通、训练稳定。"
+    },
+    {
+      "q": "跑通 Shakespeare 字符级训练后，train loss 持续降而 val loss 回升，说明？",
+      "options": [
+        "学习率太小",
+        "模型开始过拟合，记忆训练集",
+        "tokenizer 出错",
+        "梯度消失"
+      ],
+      "answer": 1,
+      "explain": "训练/验证损失分离是过拟合信号：1.1M 字符的小数据集上 10M 参数模型必然过拟，可早停或加正则。"
+    },
+    {
+      "q": "GPT 类里 weight typing（共享 wte 与 lm_head）的收益是？",
+      "options": [
+        "省掉位置编码",
+        "省 V×d 参数且输入输出同空间，小模型常更稳",
+        "把层数减半",
+        "必须配合 MoE 使用"
+      ],
+      "answer": 1,
+      "explain": "lm_head 是 d×V 的大矩阵，与 embedding 共享后既省参数又让输入输出的向量空间一致。"
+    },
+    {
+      "q": "MLP 里的 GELU 作用在哪个位置？",
+      "options": [
+        "降维投影之后",
+        "升维投影（d→4d）之后、降维（4d→d）之前",
+        "残差相加之后",
+        "注意力 softmax 之前"
+      ],
+      "answer": 1,
+      "explain": "FFN = down(act(up(x)))：先升维 4d，在宽空间过非线性 GELU，再降回 d。"
+    },
+    {
+      "q": "把你手写的 RMSNorm 与 SwiGLU 替换进 nanoGPT 的 Block，最接近哪种模型的配方？",
+      "options": [
+        "原始 Transformer（2017）",
+        "BERT",
+        "LLaMA 系（再把绝对位置编码换 RoPE）",
+        "T5"
+      ],
+      "answer": 2,
+      "explain": "LLaMA 配方 = Pre-RMSNorm + SwiGLU + RoPE；前两者今天就能换上，RoPE 在后续位置编码日补齐。"
+    }
+  ]
+}

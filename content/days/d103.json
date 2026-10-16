@@ -1,0 +1,71 @@
+{
+  "day": 103,
+  "title": "mini-LLaMA 预训练启动",
+  "sections": [
+    {
+      "h": "为什么自己预训练一个 mini-LLaMA",
+      "md": "前两周你已经读过 LLaMA 论文、搭好了训练代码、做过 Chinchilla 算力账。今天是收网时刻：**亲手把自己数据和架构喂给训练循环，按下回车，让 loss 开始下降**。\n\n直觉：预训练不是玄学，它就是「在万亿 token 上做下一个词预测」。你在 nanoGPT 里见过的每一个组件——Tokenizer、RoPE、SwiGLU、RMSNorm、AdamW、cosine 调度——今天全部在一个真实工程里组装起来。跑通一次，你对「大模型是怎么练出来的」的恐惧感会永久消失。\n\n与 Agent 的关联：Agent 的推理成本、延迟、能力上限都由基座模型决定。亲手训过一个，你才能判断「这个任务该换更大的基座还是做 SFT」。"
+    },
+    {
+      "h": "准备数据 + 配置",
+      "md": "**第一步：确认数据管线**。上周准备的中英文混合语料应已完成 tokenize 并保存为二进制 shard。今天开工前先做三项体检：\n\n```bash\nls -lh data/minillama/      # 确认 train.bin / val.bin 存在\npython3 -c \"print(int(2.1e9) // 2048)\"  # 估算步数\nhead -c 512 data/minillama/val.bin | xxd | head\n```\n\n- 数据量按 Chinchilla 账：参数量 N × 20 ≈ token 数。比如 124M 参数 ≈ 2.5B token\n- 太少会过拟合（val loss 不降反升），宁可重复 2 个 epoch 也别让数据断层\n- vocab 与 tokenizer 必须与后续 SFT 完全一致，换词表等于重训\n\n**第二步：写配置文件**。把所有超参集中到一个 YAML/JSON，不要散落在代码里：\n\n```python\ncfg = dict(\n  dim=768, n_layers=12, n_heads=12,   # ≈124M\n  max_lr=6e-4, min_lr=6e-5,\n  batch_size=2048*8,                   # token 级\n  warmup_steps=2000, max_steps=100000,\n  grad_clip=1.0, weight_decay=0.1,\n  grad_accum=8,                        # 显存不够就开\n)\n```\n\n关键点：warmup 从接近 0 线性升到 max_lr，防止初期梯度爆炸；weight_decay 只作用于权重矩阵，不动 bias 和 Norm。"
+    },
+    {
+      "h": "启动训练（后台）",
+      "md": "训练要跑几十个小时，必须放后台并保证断点可续。三件套：\n\n**1. nohup / tmux 后台运行**：\n\n```bash\ntmux new -s pretrain\npython train.py --config configs/minillama.yaml\ntmux detach        # Ctrl+B 再按 D\n```\n\n**2. checkpoint 定期保存**：每 2000 步存一次 `ckpt_*.pt`，保留最近 3 个 + 最优 val loss 那个。磁盘够就多存——训练崩了从最近点续跑，不用从零开始。\n\n**3. 启动后 10 分钟人工观察**：\n\n- loss 前 1000 步应从 ≈10.8（ln(vocab) 的自然值）快速降到 8 以下\n- grad_norm 在 warmup 结束后应稳定在 0.5–2 区间\n- 显存占用、GPU 利用率（`nvidia-smi`）是否打满\n\n> 经验法则：如果 500 步后 loss 还在 10 以上纹丝不动，多半是数据读取为空或 lr 写错了数量级，立刻杀掉排查，别浪费一晚。"
+    },
+    {
+      "h": "常见启动故障速查",
+      "md": "开工第一小时最容易翻车，按症状对号入座：\n\n| 症状 | 可能原因 | 处理 |\n|---|---|---|\n| loss 卡在 10.8 不动 | 数据全零 / mask 写反 | 抽样解码几个 batch 肉眼检查 |\n| CUDA OOM | batch 太大 | 降 micro-batch，加 grad_accum 补偿 |\n| loss 出现 NaN | lr 过高或 fp16 溢出 | lr ÷3，或换 bf16 |\n| GPU 利用率 <50% | 数据加载瓶颈 | 增大 DataLoader workers，预取 |\n| 启动即崩 | shape 不匹配 | 检查 vocab_size 与 tokenizer 是否一致 |\n\n每一条都值得在笔记本上记一行——这些是面试和实战里最值钱的一手经验。"
+    },
+    {
+      "h": "今日串联",
+      "md": "今天的产出：一条在后台稳定运行、每 2000 步存档、随时可续的训练进程。你的 mini-LLaMA 正在把 2.5B token 的语言规律压进 124M 参数里。\n\n明日预告：接入 wandb 完整监控，学会读 loss 曲线的「健康度」，并根据曲线调 LR 和 batch size——训练不是按下回车就结束，而是持续两天的驾驶。"
+    }
+  ],
+  "keyPoints": [
+    "Chinchilla 法则：token 数 ≈ 参数量 × 20，124M 模型对应约 2.5B token",
+    "配置集中管理：dim/n_layers/max_lr/warmup/grad_clip 全部写进一份配置文件",
+    "后台训练三件套：tmux、定期 checkpoint（留最近 3 个 + 最优）、启动后 10 分钟人工观察",
+    "健康信号：loss 应从 ln(vocab)≈10.8 快速下降，grad_norm 稳定在 0.5–2",
+    "tokenizer/vocab 必须与后续 SFT 一致，换词表等于重训"
+  ],
+  "quiz": [
+    {
+      "q": "刚启动预训练，loss 的初始值大约是多少？为什么？",
+      "options": ["≈0，因为模型是随机的", "≈ln(vocab)≈10.8，随机模型对每个词均匀猜测", "≈1，交叉熵下限", "取决于 lr"],
+      "answer": 1,
+      "explain": "随机初始化的模型输出接近均匀分布，交叉熵 = ln(vocab)。词表 5 万时 ≈10.8，这是所有预训练的起点，也是检查训练是否正常的第一根标尺。"
+    },
+    {
+      "q": "124M 参数的 mini-LLaMA 按 Chinchilla 法则大约需要多少训练 token？",
+      "options": ["约 2.5B（124M × 20）", "约 124M", "约 1 万亿", "越多越好，没有上限"],
+      "answer": 0,
+      "explain": "Chinchilla 结论是每个参数约配 20 个 token 达到算力最优。太少欠拟合浪费参数，太多则边际收益递减浪费算力。"
+    },
+    {
+      "q": "显存不够（OOM）时，标准做法是？",
+      "options": ["直接砍掉一半层数", "减小 micro-batch 并用梯度累积补回有效 batch", "把 lr 减半", "改用 fp32 提高精度"],
+      "answer": 1,
+      "explain": "梯度累积用多次小 forward/backward 累加梯度，数学上等价于大 batch，是显存不足时的标准手段，不改变模型结构。"
+    },
+    {
+      "q": "训练 500 步后 loss 仍在 10.8 附近不动，最该先查什么？",
+      "options": ["显卡驱动版本", "数据管线：batch 是否为空、lr 是否写错数量级", "tmux 版本", "checkpoint 保存间隔"],
+      "answer": 1,
+      "explain": "loss 完全不动说明模型没在学：最常见是数据读取为空或 lr 差了 1000 倍。先抽样解码一个 batch 肉眼验证，再打印实际 lr。"
+    },
+    {
+      "q": "为什么 warmup 阶段要把 lr 从接近 0 线性升上去？",
+      "options": ["为了让 loss 曲线好看", "训练初期梯度方向混乱，大 lr 会造成参数崩坏（NaN/发散）", "为了节省电费", "AdamW 的强制要求，写死在库里的"],
+      "answer": 1,
+      "explain": "初期参数随机、梯度噪声大，直接上大 lr 容易走进坏区域甚至溢出。warmup 给 optimizer 的动量统计留出稳定时间，是 LLaMA/GPT 系的标准配置。"
+    },
+    {
+      "q": "关于 checkpoint 策略，下列哪种最稳妥？",
+      "options": ["只在训练结束时保存一次", "每 2000 步保存，保留最近 3 个和 val loss 最优的一个", "每步都保存全部 checkpoint", "不保存，崩了重头训"],
+      "answer": 1,
+      "explain": "定期保存 + 保留最近几个用于续跑 + 保留 val 最优用于后续 SFT，兼顾磁盘成本与安全；每步全存会瞬间写满磁盘。"
+    }
+  ]
+}

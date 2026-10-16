@@ -1,0 +1,65 @@
+{
+  "day": 44,
+  "title": "混合精度训练 (AMP)",
+  "sections": [
+    {
+      "h": "一半显存、两倍速度：AMP 是什么买卖",
+      "md": "GPU 的 FP16 算力通常是 FP32 的 2–8 倍（Tensor Core 就是为此设计），显存带宽也省一半。**混合精度训练（AMP）**的赌注：大部分运算用低精度，关键的几处保留高精度——**精度几乎不丢，速度翻倍、显存减半**。工业界默认开启，今天搞懂它为什么能成立、哪里会翻车。\n\n直觉先行：浮点数 = 符号位 + 指数位（量级）+ 尾数位（精度）。低精度砍的是尾数，**量级必须保住**——训练翻车几乎都翻在量级（上溢/下溢）而不是精度。"
+    },
+    {
+      "h": "FP16 / BF16 / FP32：三种格式的数值版图",
+      "md": "| 格式 | 符号 | 指数 | 尾数 | 数值范围 | 精度 |\n|---|---|---|---|---|---|\n| FP32 | 1 | 8 | 23 | ±3.4e38 | 基准 |\n| FP16 | 1 | 5 | 10 | **±65504，最小正规数 6e-5** | 尾数少 13 位 |\n| BF16 | 1 | **8** | 7 | **与 FP32 同宽** | 尾数少 16 位 |\n\nFP16 的两个坑：\n\n- **上溢**：激活或 loss 超过 65504 → inf → NaN（大 batch 的 loss 轻松超）\n- **下溢**：深度网络里小梯度 < 6e-5，FP16 直接表示成 0——**梯度悄悄消失，训练假死**\n\nBF16（Ampere 后 GPU 原生支持）：指数位与 FP32 相同，范围完全一致，上溢下溢问题基本消失，代价是尾数更粗。**现代 LLM 的默认答案：BF16**；老卡（V100 及更早）只能 FP16，才需要下面的缩放技巧。"
+    },
+    {
+      "h": "AMP 两大组件：autocast + GradScaler",
+      "md": "**autocast（自动类型转换）**：包住前向，自动决定每个算子用哪种精度——\n\n- matmul/conv → FP16/BF16（吞吐大头，对精度不敏感）\n- loss、softmax、reduction → FP32（累加易丢精度，必须保）\n\n**GradScaler（仅 FP16 需要）**：解决小梯度下溢——loss 乘一个放大因子 S（如 65536），梯度整体被放大到 FP16 可表示区间，**优化器 step 前再除回去**：\n\n```\nscaled_loss = loss × S\nscaled_loss.backward()    # 梯度都还在 FP16 范围内\nscaler.unscale_(opt)      # 除回真实值\nscaler.step(opt)          # 若出现 inf/NaN 则跳过本步\nscaler.update(S)          # 动态调整 S\n```\n\n妙处：溢出的那一步被检测并跳过，S 自动下调——训练永远安全。BF16 范围够大，不需要 scaler。"
+    },
+    {
+      "h": "实战：CIFAR-10 的 AMP 训练循环",
+      "md": "完整骨架（对比昨天的循环只多了三行标注）：\n\n```python\nscaler = torch.cuda.amp.GradScaler()      # BF16 可省\nfor x, y in loader:\n    opt.zero_grad()\n    with torch.autocast('cuda', dtype=torch.float16):\n        logits = model(x)                  # 前向自动半精度\n        loss = F.cross_entropy(logits, y)  # loss 内部回 FP32\n    scaler.scale(loss).backward()\n    scaler.step(opt)\n    scaler.update()\n```\n\n实验记录三个数（预期结果，自己验证）：\n\n| 指标 | FP32 | AMP(FP16) |\n|---|---|---|\n| 每 epoch 时间 | 1.0× | ≈0.5–0.7× |\n| 峰值显存 | 1.0× | ≈0.6–0.7× |\n| 最终 test acc | 基准 | 持平（±0.2%） |\n\n注意事项：autocast 只包**前向**；backward 会自动记录并回放对应精度；模型权重仍是 FP32（optimizer 一步里做完类型转换），这就是「混合」二字的含义。"
+    },
+    {
+      "h": "今日串联 + LLM 关联",
+      "md": "AMP 的本质是一笔**数值预算分配**：量级敏感处（指数）花得多，吞吐敏感处（矩阵乘）省着花。它与 Day 40 的初始化、Day 46 的归一化同属一个主题——让数值在几十层网络里稳定流动。\n\n**LLM 关联**：\n\n- 现代大模型训练的**默认配置**就是 BF16 混合精度 + FP32 主权重（Adam 的 m/v 也常保持 FP32/BF16 混合，如 `adamw_torch_fused`）\n- 6.7B 模型从 FP32 切到 BF16：激活显存约省一半，同样 GPU 上 batch 翻倍或模型翻倍\n- 推理端更进一步：INT8/INT4 量化（GPTQ、AWQ）把「低精度换吞吐」推到极限，思路与 AMP 同源：**对误差不敏感的地方省字节**\n- 历史注脚：GPT-2 时代用 FP16+loss scaling 曾是显学；A100 之后 BF16 让 GradScaler 逐渐退役——面试常考的「为什么」就在今天的表格里"
+    }
+  ],
+  "keyPoints": [
+    "浮点数 = 符号+指数(量级)+尾数(精度)；训练翻车几乎都在量级（上溢/下溢）而非精度",
+    "FP16 范围 ±65504、最小正规数 6e-5：大 loss 上溢成 inf，小梯度下溢成 0",
+    "BF16 指数位与 FP32 相同、范围一致：基本免除溢出问题，是现代 LLM 默认",
+    "autocast 包前向自动选精度（matconv→半精度、loss/softmax→FP32）；GradScaler 放大 loss 防梯度下溢，溢出步自动跳过",
+    "AMP 下权重与优化器仍是 FP32 主副本，只是前向/反向走低精度——「混合」的含义"
+  ],
+  "quiz": [
+    {
+      "q": "FP16 训练最常见的翻车方式是？",
+      "options": ["权重全部变成整数", "激活/loss 超 65504 变 inf，或小梯度低于 6e-5 被表示成 0", "学习率自动衰减", "GPU 发热降频"],
+      "answer": 1,
+      "explain": "FP16 指数位只有 5 位：上溢（大数值变 inf→NaN）与下溢（小梯度归零、训练假死）是两大死法，GradScaler 和 BF16 分别应对。"
+    },
+    {
+      "q": "BF16 相比 FP16 的关键差异是？",
+      "options": ["尾数更多", "指数位与 FP32 相同（8 位），数值范围一致，基本不怕溢出", "计算更快", "只支持 CPU"],
+      "answer": 1,
+      "explain": "BF16 牺牲尾数（7 位）换与 FP32 同宽的指数（8 位）：范围不缩水、精度略粗——对深度学习，量级比尾数重要得多。"
+    },
+    {
+      "q": "GradScaler 为什么要把 loss 乘 65536 再 backward？",
+      "options": ["让 loss 看起来更大以鼓舞士气", "把小梯度整体抬进 FP16 可表示区间，step 前再除回去", "加快收敛", "替代学习率调度"],
+      "answer": 1,
+      "explain": "链式法则里 loss 乘常数 → 所有梯度同倍放大，不再下溢；unscale 后恢复真实值。若放大后反而溢出，该步被跳过并自动调小 S。"
+    },
+    {
+      "q": "`torch.autocast` 区域内，cross_entropy 这类 reduction 运算通常？",
+      "options": ["转成 FP16 加速", "保持 FP32：大量累加对精度敏感，低精度会累积误差", "转成整数", "报错"],
+      "answer": 1,
+      "explain": "autocast 维护一张算子白名单/黑名单：matmul/conv 降精度提速，softmax/loss/求和等 reduction 保 FP32 防误差累积。"
+    },
+    {
+      "q": "AMP 训练中模型权重和优化器状态通常是什么精度？",
+      "options": ["全部 FP16，最省显存", "保持 FP32 主副本，仅前向/反向走低精度", "全部 BF16", "权重 INT8"],
+      "answer": 1,
+      "explain": "参数更新量相对权重很小，FP16 尾数不够会「更新了等于没更新」；FP32 主权重保证累积精度，这就是 mixed precision 的混合之义。"
+    }
+  ]
+}

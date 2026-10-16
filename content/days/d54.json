@@ -1,0 +1,72 @@
+{
+  "day": 54,
+  "title": "ResNet 训练到 ≥ 88%",
+  "sections": [
+    {
+      "h": "里程碑：把三周工具拧成一台机器",
+      "md": "今天是 Phase 2 的核心里程碑：CIFAR-10 验证准确率 **≥ 88%**。目标本身不难（ResNet-20 标准配方约 91%），难的是**用系统工程的方式拿到它**：\n\n| 配置 | 预期准确率 | 涨点来源 |\n|---|---|---|\n| ResNet-20 无增强 | ~87~88% | 架构先验 |\n| + flip/crop | ~90% | 几何不变性 |\n| + CutOut/MixUp + cosine | ~92%+ | 软标签 + 调度 |\n\n今天的纪律：**一次只改一个变量**，每个 run 都进 wandb。88% 不是抽卡，是这张表的起点。"
+    },
+    {
+      "h": "基线配方：先跑通再调优",
+      "md": "完整脚本骨架（Day 47/52/53 的拼装）：\n\n```python\n# 1. 数据：训练集增强，测试集确定性\ntrain_tf = T.Compose([T.RandomCrop(32, 4), T.RandomHorizontalFlip(),\n                      T.ToTensor(), T.Normalize(MEAN, STD)])\n# 2. 模型：Day 52 的 ResNet-20\nmodel = ResNet20(num_classes=10).to(dev)\n# 3. 优化：SGD + one-cycle 调度\nopt = torch.optim.SGD(model.parameters(), lr=0.1,\n                      weight_decay=5e-4, momentum=0.9, nesterov=True)\nsched = torch.optim.lr_scheduler.OneCycleLR(\n    opt, max_lr=0.1, steps_per_epoch=len(train_loader), epochs=100)\n# 4. 循环：AMP 提速\nscaler = torch.amp.GradScaler()\nfor epoch in range(100):\n    for xb, yb in train_loader:\n        with torch.autocast('cuda'):\n            loss = F.cross_entropy(model(xb), yb)\n        opt.zero_grad()\n        scaler.scale(loss).backward(); scaler.step(opt); scaler.update()\n        sched.step()\n    wandb.log({'val/acc': evaluate(model, test_loader)})\n```\n\n检查点：前 10 个 epoch 应到 70%+；loss 不降先用 Day 49 读图手册诊断。"
+    },
+    {
+      "h": "调优决策树：不达标时往哪看",
+      "md": "按优先级排查（对照 wandb 曲线）：\n\n1. **LR 不对**（最常见）：loss 震荡 → 降 max_lr；降太慢 → 升。回到 Day 47 的 LR finder 复核\n2. **增强没生效/太强**：确认 transform 只在 train_tf；MixUp/CutOut 从 0.5 起调——增强越强收敛越慢，别在 20 epoch 时误判「变差了」\n3. **过拟合**：train 99% / val 停在 85% → 加 weight decay（5e-4→2e-3）、加 CutOut/RandAugment\n4. **欠拟合**：两者都在 85% 趴着 → 延长训练（100→200 epoch）、加深到 ResNet-32\n5. **细节 bug**：忘了 sched.step、测试集也做了随机增强、BN 的 eval/train 模式没切换\n\n经验：新手杀手常是第 5 类——**先信曲线，再信直觉**。达标后可继续冲 92%，但先把 run 的 config 存成 baseline 作复盘锚点。"
+    },
+    {
+      "h": "wandb 记录完整实验",
+      "md": "实验管理的最低标准：三个月后你还能看懂今天做了什么。\n\n```python\nwandb.init(project='cifar10-phase2', name='resnet20-oc100-aug2', config={\n    'arch': 'resnet20', 'epochs': 100, 'batch': 128,\n    'opt': 'SGD', 'lr': 0.1, 'wd': 5e-4,\n    'sched': 'onecycle', 'aug': 'crop4+flip+cutout16', 'seed': 42})\n```\n\n必记清单：\n\n- **config 全量**：架构/优化器/调度/增强/种子\n- **曲线**：train loss、val acc、LR 实际值、grad norm\n- **产物**：`wandb.save('best.pt')` 存最优权重；`wandb.Table` 记混淆矩阵（猫/狗是 CIFAR 经典混淆对）\n\n用 **compare 视图**并排看几个 run 的 val 曲线——「增强 +2.1 点」「cosine 比 step +0.8 点」这类结论只有并排对比才可信。run 多了以后，**没有记录的实验等于没做**——这套习惯将来直接迁移到 LLM 微调。"
+    },
+    {
+      "h": "今日串联 + Phase 2 收官展望",
+      "md": "今天没有新知识，只有**收敛**：架构（ResNet）× 训练（调度 + AMP）× 数据（增强）× 观测（wandb）四力合一，88% 顺手而至；沉淀的方法论：基线 → 一次一变量 → 曲线诊断 → 记录归档。\n\n你已经具备第一性训练能力：给一个新数据集，能从增强、架构、优化配方到实验管理独立走完全程。往后：更强的骨干（MobileNet/EfficientNet）、迁移学习，最终把「卷积直觉」带进 ViT 与多模态——大模型的视觉编码器正是从这些块长出来的。"
+    }
+  ],
+  "keyPoints": [
+    "里程碑公式：ResNet-20 + flip/crop + one-cycle 在 CIFAR-10 稳过 88%（标准配方约 91%）",
+    "调优优先级：LR → 增强强度 → 过拟合（wd/强增强）→ 欠拟合（加长/加深）→ 工程 bug",
+    "增强越强收敛越慢：MixUp/CutOut 需要更多 epoch，别在早期误判为「变差」",
+    "AMP 混合精度 + Nesterov 是免费提速；sched.step 别漏",
+    "wandb 记 config 全量 + loss/acc/LR/grad norm 曲线 + 最优权重 + 混淆矩阵",
+    "方法论：基线 → 一次一变量 → 曲线诊断 → 归档；没有记录的实验等于没做"
+  ],
+  "quiz": [
+    {
+      "q": "训练 15 个 epoch 后加了 MixUp 的 run 反而比基线低，最合理的判断是？",
+      "options": ["MixUp 无效，立即移除", "强增强天然收敛更慢，需要更多 epoch 才能反超，先跑完全程再下结论", "学习率必须立刻翻倍", "模型过拟合了"],
+      "answer": 1,
+      "explain": "MixUp/CutOut 让任务变难（软标签+遮挡），前期慢是预期行为；典型曲线是中后期反超。凭早期 epoch 否定强增强是最常见的误判。"
+    },
+    {
+      "q": "train acc 99%、val acc 停在 85%，按调优决策树应该优先做什么？",
+      "options": ["延长训练到 400 epoch", "加强正则：weight decay 5e-4→2e-3、加 CutOut/RandAugment", "减小模型", "降低 batch size"],
+      "answer": 1,
+      "explain": "train/val 差距 14 个点是典型过拟合：先加数据增强和 weight decay；延长训练只会让记忆更牢，方向就错了。"
+    },
+    {
+      "q": "验证曲线显示 LR 从未变化（wandb 里 train/lr 一条水平线），最可能漏了什么？",
+      "options": ["忘了在每个 optimizer step 后调用 sched.step()；或 scheduler 在 optimizer 之前创建", "模型太浅", "数据集太小", "AMP 没开"],
+      "answer": 0,
+      "explain": "one-cycle/cosine 要逐步改 param_group 的 lr；漏调 sched.step() 会让 LR 恒在初始值。PyTorch 还要求先建 optimizer 再建 scheduler，顺序错会直接警告。"
+    },
+    {
+      "q": "「没有记录的实验等于没做」的原因是？",
+      "options": ["wandb 比本地日志便宜", "run 数量增多后，无 config/曲线归档的实验无法对比复现，结论不可信也不可追溯", "为了美观", "法律要求"],
+      "answer": 1,
+      "explain": "调参靠的是并排对比与归因；缺了 config（LR/增强/种子/架构）的 run 三个月后无法解释差异，经验无法沉淀——这套习惯在将来管 LLM 微调 run 时同样成立。"
+    },
+    {
+      "q": "混淆矩阵显示猫和狗互相误判最多，最对症的下一步是？",
+      "options": ["直接把这两类从数据集删掉", "加强纹理/局部细节相关的增强（如 RandAugment）或加深网络，而非全局调 LR", "把输入分辨率降到 16×16", "换成交叉熵以外的损失"],
+      "answer": 1,
+      "explain": "猫狗混淆是细粒度区分不足：需要更强的局部特征学习能力。混淆矩阵的价值正在于把「总体准确率」翻译成「哪类能力短板」。"
+    },
+    {
+      "q": "AMP 混合精度训练中 scaler 的作用是？",
+      "options": ["把所有参数变成 float16", "对 loss 放大以避免 fp16 小梯度下溢，并跳过 inf step", "自动调节学习率", "压缩模型体积"],
+      "answer": 1,
+      "explain": "fp16 表示范围小，小梯度会变 0；GradScaler 先放大 loss 使反向梯度进入可表示范围，检测到 inf/NaN 时跳过该 step，兼顾速度与稳定。"
+    }
+  ]
+}

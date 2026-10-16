@@ -1,0 +1,68 @@
+{
+  "day": 117,
+  "title": "Speculative Decoding",
+  "sections": [
+    {
+      "h": "直觉：解码时算力是闲置的",
+      "md": "Day 113 的结论：decode 每步读完全部权重和 KV，只产出 1 个 token——访存受限，**算力大量闲置**。投机解码（Leviathan et al.、Chen et al.，2023）的洞察是：既然一次 forward 的计算开销远未打满，能不能一次多算几个位置？\n\n流程（draft-verify）：\n\n1. **draft**：小模型（如 68M 级）快速自回归地猜出 γ 个 token\n2. **verify**：大模型用**一次 forward 并行**对这 γ+1 个位置全部算出 logits——成本与生成 1 个 token 几乎相同\n3. **accept/reject**：从左到右核对，接受匹配的前缀，在第一个分歧处重采样，然后进入下一轮\n\n赌赢了：一次权重读取换回多个 token；赌输了：大模型还是给了正确的下一个 token，顶多浪费了 draft 的廉价计算。"
+    },
+    {
+      "h": "机制：修正拒绝采样保证无损",
+      "md": "贪心解码时规则很简单：接受 draft token 当且仅当它等于 argmax；在第一个不匹配处用大模型的 argmax 替换。\n\n采样解码时要小心：直接『比对采样结果』会让输出分布偏离大模型。Leviathan / Chen 的**修正拒绝采样（modified rejection sampling）**：对每个 draft token x，以 min(1, p(x)/q(x)) 的概率接受（p 是大模型分布、q 是 draft 分布）；被拒的位置不再用 draft 剩余部分，而是从归一化后的 max(0, p−q) 重采样。\n\n**结论：无论 draft 多差，最终输出分布与直接用大模型采样完全一致——无损加速**。这是它相对蒸馏（改变模型）的根本区别。\n\n数学期望：设单 token 接受率为 α，一轮 draft γ 个，则每轮平均产出：\n\n```\nE[tokens/轮] = (1 − α^(γ+1)) / (1 − α)\n```"
+    },
+    {
+      "h": "加速比条件与算例",
+      "md": "墙钟收益 = 每轮产出 token 数 ÷ 每轮成本（1 步大模型 + γ 步小模型）。设 draft 相对成本为 c，加速比 ≈ E / (1 + γc)。\n\n算例：α=0.8、γ=4、c=0.1：\n\n```\nE = (1 − 0.8⁵) / 0.2 ≈ 3.36 token/轮\n加速比 ≈ 3.36 / (1 + 4×0.1) ≈ 2.4×\n```\n\n由此读出**加速的条件**：\n\n- **α 要高**：draft 与目标分布接近。同家族模型 + 同 tokenizer（如 llama-68m 配 llama-7b）最稳；温度越高分布越发散，α 掉得越快\n- **draft 要便宜**：c 越小越好，但太小的模型 α 低——存在甜点区（实践常用 68M–1B 级 draft 配 7B–70B 目标）\n- **γ 别贪**：γ 增大时 E 的边际收益递减而 draft 成本线性涨，常用 3–8\n\n典型实测 2–3×；负载不对（高温度创作、draft 不匹配）时可能低于 1×（负优化），务必拿真实负载测。"
+    },
+    {
+      "h": "变体与实战用法",
+      "md": "draft 不必是独立小模型，这是近两年的主要演化方向：\n\n- **n-gram / prompt lookup**：直接从输入文本里找 n-gram 匹配当 draft。对**输入含答案**的负载（代码补全、改写、抽取、RAG 摘要）几乎免费且 α 极高\n- **Medusa**：给大模型加多个解码头同时预测未来几个位置\n- **EAGLE**：在特征层面自回归地起草，属于 self-speculative 路线，免维护独立 draft\n\n用法上，HuggingFace 的 assisted generation 一行开启：\n\n```python\nout = model.generate(inputs, assistant_model=draft_model,\n                     do_sample=True, max_new_tokens=200)\n```\n\nvLLM 中：\n\n```bash\nvllm serve <model> --speculative-model <draft> --num-speculative-tokens 5\n```\n\n验证是否赚：观察日志里的 acceptance length（平均每轮接受数）与端到端 tok/s；它只提速 decode，对 TTFT（prefill）没有帮助。"
+    }
+  ],
+  "keyPoints": [
+    "decode 访存受限、算力闲置 → 一次 forward 并行验证 γ 个 draft token，成本≈生成 1 个 token",
+    "修正拒绝采样（min(1, p/q) 接受 + (p−q)+ 重采样）保证输出分布与大模型完全一致——无损",
+    "E[tokens/轮] = (1 − α^(γ+1))/(1 − α)；加速比 ≈ E/(1 + γc)，α 高 + draft 便宜是两个前提",
+    "α 随温度升高、draft 与目标分布差异增大而下降；γ 常取 3–8",
+    "变体：prompt lookup（输入含答案类负载最赚）、Medusa/EAGLE（self-speculative）",
+    "vLLM：--speculative-model + --num-speculative-tokens；只加速 decode，不改善 TTFT"
+  ],
+  "quiz": [
+    {
+      "q": "为什么用大模型一次 forward『并行验证』γ 个 draft token 的开销近似等于生成 1 个 token？",
+      "options": ["decode 是访存受限的：权重与 KV 只读一次，多算几个位置的 FLOPs 几乎白送", "大模型会自动跳层", "draft token 不经过大模型", "GPU 有专门的验证单元"],
+      "answer": 0,
+      "explain": "瓶颈在读取权重/KV 的带宽而非计算；一次 forward 处理 γ+1 个位置仍只读一遍权重，浮点开销在访存受限区内可忽略——这是投机解码全部收益的来源。"
+    },
+    {
+      "q": "α=0.7、γ=4 时，每轮平均产出多少个 token（含第一个被纠正的）？",
+      "options": ["约 2.77", "约 2.8×", "约 4", "约 1.7"],
+      "answer": 0,
+      "explain": "E = (1 − 0.7⁵)/(1 − 0.7) = (1 − 0.168)/0.3 ≈ 2.77。注意 0.7⁵ ≈ 0.168 的指数衰减——γ 越大，尾部的接受概率越低，所以 γ 不能贪大。"
+    },
+    {
+      "q": "投机解码对输出质量的影响是？",
+      "options": ["无损：修正拒绝采样保证最终分布与直接用大模型采样完全一致", "轻微下降但可接受", "与蒸馏类似", "只在贪心解码时无损"],
+      "answer": 0,
+      "explain": "接受概率 min(1, p/q) + 从 (p−q)+ 重采样构成精确的分布变换，数学上与从 p 采样等价；贪心与采样情形都无损。draft 再差也只是慢，不会错。"
+    },
+    {
+      "q": "以下哪种负载最不适合投机解码？",
+      "options": ["高温度的创意写作且 draft 与目标分布差异大", "低温度的代码补全", "RAG 摘要（输入含答案）", "结构化输出"],
+      "answer": 0,
+      "explain": "温度高时 p 与 q 都变平坦发散、重叠减小，α 下降；draft 与目标不同家族/tokenizer 更是雪上加霜，加速比可能跌破 1。输入含答案类负载则 α 极高。"
+    },
+    {
+      "q": "prompt-lookup / n-gram 投机最适合的场景是？",
+      "options": ["输出大量复制或改写输入的任务：代码补全、文本编辑、抽取式摘要", "开放域自由创作", "数学推理", "多轮闲聊"],
+      "answer": 0,
+      "explain": "这类任务的正确输出常在输入里出现过，n-gram 匹配直接命中，draft 零成本且接受率高；自由创作则命中率极低。"
+    },
+    {
+      "q": "Medusa / EAGLE 属于哪一类投机方案？",
+      "options": ["self-speculative：不引入独立小模型，在目标模型自身上加头/层级起草", "蒸馏", "量化", "并行采样"],
+      "answer": 0,
+      "explain": "Medusa 给目标模型加多个解码头并行预测未来位置，EAGLE 在特征层自回归起草——都省去维护一个单独的 draft 模型，也避免了 tokenizer 对齐问题。"
+    }
+  ]
+}

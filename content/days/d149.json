@@ -1,0 +1,90 @@
+{
+  "day": 149,
+  "title": "Qwen2.5-VL 部署",
+  "sections": [
+    {
+      "h": "为什么选 Qwen2.5-VL：你的视频分析目标落地",
+      "md": "前几天部署的 LLM 只会文字。今天给 Agent 装上眼睛。Qwen2.5-VL 是阿里开源的多模态模型，选它有三个理由：\n\n- **原生视频理解**：输入帧序列 + 时间戳，能回答「第几秒发生了什么」，多数 VLM 只能逐帧看图\n- **中文强**：你的课程和视频素材以中文为主，Qwen 系列中文能力是开源第一梯队\n- **尺寸齐全**：3B / 7B / 72B；7B 量化后一张 24GB 消费级显卡可跑\n\n支持的任务覆盖 VQA、OCR、文档解析、目标检测框输出、视频时间定位。今天目标：跑起来 + 写一个视频理解 demo。"
+    },
+    {
+      "h": "部署：vLLM 起服务是生产姿势",
+      "md": "两种主流方式，推荐第二种：\n\n**方式一：transformers 直接加载**——适合调试：\n\n```python\nfrom transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor\nmodel = Qwen2_5_VLForConditionalGeneration.from_pretrained(\n    \"Qwen/Qwen2.5-VL-7B-Instruct\", torch_dtype=\"auto\",\n    device_map=\"auto\")\nproc = AutoProcessor.from_pretrained(\"Qwen/Qwen2.5-VL-7B-Instruct\")\n```\n\n**方式二：vLLM OpenAI 兼容服务**——生产部署：\n\n```bash\nvllm serve Qwen/Qwen2.5-VL-7B-Instruct \\\n  --max-model-len 32768 --limit-mm-per-prompt video=1\n```\n\n```bash\ncurl http://localhost:8000/v1/chat/completions -d '{\n  \"model\": \"Qwen/Qwen2.5-VL-7B-Instruct\",\n  \"messages\": [{\"role\":\"user\",\n    \"content\":[{\"type\":\"video\",\n      \"video_url\":{\"url\":\"file:///data/demo.mp4\"},\n     \"max_pixels\": 768*28*28},\n     {\"type\":\"text\",\"text\":\"用中文总结这个视频\"}]}]}'\n```\n\n显存账：7B bf16 约 15GB + KV cache；24GB 卡用 AWQ/GPTQ 4bit 量化版（约 6GB）更稳。`max-model-len` 要给视频 token 留够预算（默认 2fps 抽帧，每帧几百 token）。"
+    },
+    {
+      "h": "机制：视频是怎么被 token 化的",
+      "md": "Qwen2.5-VL 处理视频的流水线：\n\n1. **抽帧**：默认 2 fps 采样（可调），每帧缩放到 `max_pixels` 内\n2. **视觉编码**：每帧过 ViT（原生动态分辨率，patch 数随图像大小变化）\n3. **时间对齐**：在帧间插入**时间戳 token**（M-RoPE 把时间维加进旋转位置编码），模型才分得清「先 A 后 B」还是反过来\n4. **合并进 LLM**：视觉 token 与文字 token 拼接进 Qwen2.5 语言塔统一做注意力\n\n```\n[系统提示] [帧1] [t=0.0] [帧2] [t=0.5] … [文字问题]\n        → LLM → 流式回答\n```\n\n昨天学的 ViT 就是第 2 步主角——**多模态模型 = 视觉编码器 + 连接器 + LLM**，Qwen2.5-VL 的连接器是简单 MLP（压缩相邻视觉 token、对齐语言维度）。"
+    },
+    {
+      "h": "写一个视频理解 demo",
+      "md": "目标：命令行输入一个 mp4，输出「分段摘要 + 关键时间点 + 可回答追问」。骨架：\n\n```python\nimport decord, requests, json\n\ndef ask_video(path, q, history=[]):\n  vr = decord.VideoReader(path)\n  msgs = [{\"role\":\"user\",\"content\":[\n    {\"type\":\"video\",\"video\":f\"file://{path}\",\n     \"fps\":2.0},\n    {\"type\":\"text\",\"text\":q}]}]\n  r = requests.post(\"http://localhost:8000/v1/chat/completions\",\n      json={\"model\":\"Qwen/Qwen2.5-VL-7B-Instruct\",\n            \"messages\":history+msgs, \"max_tokens\":1024})\n  return r.json()[\"choices\"][0][\"message\"][\"content\"]\n\nprint(ask_video(\"/data/meeting.mp4\",\n  \"分段总结这个视频，标出每段的起止秒数\"))\n```\n\n工程要点：先用 `ffprobe` 拿时长与音轨信息；长视频（>10 分钟）**分段处理再拼接摘要**，一次塞全部帧会爆 context；`fps` 从 2 降到 1 可减半视觉 token。加个 while 循环接收追问，就是极简视频问答 Agent 的雏形。"
+    },
+    {
+      "h": "与 LLM/Agent 的关联",
+      "md": "在 Agent 架构里，Qwen2.5-VL 通常扮演**感知工具**：主 Agent 把它当工具调用——「分析这个视频/截图」，拿回文字结论再决策。这正是 Day 152 要搭的视频+语音 Agent 的视觉半边。\n\n明天加耳朵：Whisper 转写音轨。视频的画面（VLM）+ 台词（ASR）+ 综合推理（LLM）三路信息，就是多模态 Agent 的标准感知栈。"
+    }
+  ],
+  "keyPoints": [
+    "Qwen2.5-VL 原生支持视频：按 fps 抽帧 + 时间戳 token + M-RoPE 时间维位置编码，能定位事件时段",
+    "生产部署用 vLLM 起 OpenAI 兼容服务：--limit-mm-per-prompt video=1，max-model-len 给视频 token 留预算",
+    "7B 模型 24GB 卡建议 AWQ/GPTQ 4bit 量化（权重约 6GB），bf16 全精度约 15GB",
+    "架构公式：VLM = 视觉编码器（ViT，昨天学的）+ 连接器（MLP 压缩对齐）+ 语言塔",
+    "长视频 demo 要分段处理再拼接摘要；降 fps、限 max_pixels 是控制视觉 token 数的两把旋钮"
+  ],
+  "quiz": [
+    {
+      "q": "Qwen2.5-VL 能回答「第几秒发生了什么」，主要靠什么机制？",
+      "options": [
+        "它内置了单独的视频检索数据库",
+        "帧序列中插入时间戳 token，且 M-RoPE 位置编码含时间维",
+        "它逐帧调用了 Whisper",
+        "视频会先被转成文字描述"
+      ],
+      "answer": 1,
+      "explain": "时间戳 token 显式标注每帧时刻，M-RoPE 让注意力感知时间顺序，二者合力实现时序理解与事件定位。"
+    },
+    {
+      "q": "vLLM 部署 Qwen2.5-VL-7B 时报错显存不足（24GB 卡），最合理的先试方案？",
+      "options": [
+        "换 3B 模型并加 --max-model-len 限制",
+        "把 --max-model-len 调到 200k",
+        "升级 CUDA 到最新版",
+        "把 batch size 调成 1"
+      ],
+      "answer": 0,
+      "explain": "降模型尺寸或换 4bit 量化版、限制上下文长度都直接省显存；调大 max-model-len 反而更耗，batch 非当前瓶颈。"
+    },
+    {
+      "q": "一个 10 分钟视频按默认 2fps 抽帧，为什么不能一次全部塞进 prompt？",
+      "options": [
+        "视频格式不兼容",
+        "1200 帧 × 每帧数百视觉 token 会耗尽 context 与显存，需分段处理",
+        "vLLM 不支持多帧",
+        "时间戳会互相覆盖"
+      ],
+      "answer": 1,
+      "explain": "视觉 token 量 = 帧数 × 每帧 token 数，线性增长极快；标准做法是分片摘要再归并，同时可降 fps/分辨率。"
+    },
+    {
+      "q": "Qwen2.5-VL 的整体架构可以概括为？",
+      "options": [
+        "单个端到端 transformer，无模块划分",
+        "视觉编码器（ViT）+ 连接器（MLP）+ LLM 语言塔，视觉 token 拼入语言序列",
+        "CNN 提特征 + RNN 时序建模",
+        "双塔结构，图像和文字只在损失层交互"
+      ],
+      "answer": 1,
+      "explain": "主流 VLM 都是「编码器-连接器-LLM」三段式；视觉 token 与文字 token 拼接后统一过语言塔做注意力。"
+    },
+    {
+      "q": "想减少视频的视觉 token 消耗，以下哪两个旋钮有效？",
+      "options": [
+        "降低抽帧 fps、限制每帧 max_pixels",
+        "换更短的系统提示、关掉流式输出",
+        "提高 temperature、加 top_p",
+        "换更小的 patch 尺寸"
+      ],
+      "answer": 0,
+      "explain": "token 数 ≈ 帧数 × 每帧 patch 数：降 fps 减帧数，限 max_pixels 减每帧 patch 数，两者都直接线性省 token。"
+    }
+  ]
+}

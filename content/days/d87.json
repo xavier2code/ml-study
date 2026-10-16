@@ -1,0 +1,71 @@
+{
+  "day": 87,
+  "title": "训练：AMP + 梯度累积 + ZeRO-1",
+  "sections": [
+    {
+      "h": "为什么大模型训练需要这三件套",
+      "md": "到此为止你训过的模型都「塞得进一张卡」。但 mini-GPT 50M 已经开始吃力，真到 1B 以上，单卡连**优化器状态**都放不下。大模型训练的三大瓶颈：\n\n- **显存**：参数 + 梯度 + 优化器状态，Adam 下 1 个参数要占约 16 字节（fp32 参数 4B + fp32 动量 4B + fp32 方差 4B + 混合精度主副本，另加 fp16 副本 2B）\n- **吞吐**：训练慢一天 = 烧一天 GPU 钱\n- **稳定性**：数值一大一小小，容易溢出或下溢\n\n今天的三项技术分别对症：**AMP** 省显存提速度，**梯度累积**用小显存模拟大 batch，**ZeRO-1** 把优化器状态切到多卡上。"
+    },
+    {
+      "h": "AMP：混合精度训练",
+      "md": "直觉：矩阵乘法用低精度（快、省），权重更新用高精度（稳）。**AMP（Automatic Mixed Precision）** 的规则：\n\n- 前向/反向大部分算子用 fp16 或 bf16，吞吐约翻倍、激活显存减半\n- 主权重保持 fp32：1e-7 量级的更新加到 fp16 权重（精度约 1e-3）上会被完全吞掉\n\nfp16 的动态范围小（最大 ≈65504），小梯度会下溢成 0。解法是 **loss scaling**：反向前把 loss 放大 S 倍，让梯度整体搬进 fp16 可表示区间，优化器拿到梯度后再除回 S。S 由框架动态调整：出现 inf/nan 就把 S 减半并跳过这步。\n\n```python\nscaler = torch.cuda.amp.GradScaler()\nwith torch.cuda.amp.autocast(dtype=torch.float16):\n    loss = model(x).loss\nscaler.scale(loss).backward()\nscaler.step(optimizer)   # 内部 unscale + 溢出检查\nscaler.update(optimizer)\n```\n\n> **bf16** 动态范围与 fp32 相同（8 位指数），不需要 loss scaling，A100 之后的卡优先用它。"
+    },
+    {
+      "h": "梯度累积：小显存模拟大 batch",
+      "md": "有效 batch = 每步样本数。样本变大的收益在 p 附近饱和，但 1M 量级的大 batch 仍是 LLM 标配。一张卡放不下怎么办？**累积**：\n\n```python\noptimizer.zero_grad()\nfor i, batch in enumerate(loader):\n    with autocast():\n        loss = model(batch).loss / ACCUM\n    scaler.scale(loss).backward()  # 梯度累加\n    if (i + 1) % ACCUM == 0:\n        scaler.step(optimizer)\n        scaler.update(optimizer)\n        optimizer.zero_grad()\n```\n\n机制：`backward()` 是**累加**到 `.grad` 上而不是覆盖，所以把 loss 除以 ACCUM 再累 ACCUM 次，数学上严格等价于大 batch 一步。注意三件事：\n\n1. 学习率调度按**优化器步**计数，不是 micro-batch 步\n2. BN 统计（如果有）仍按 micro-batch 算，会有细微差异；GPT 用 LN 不受影响\n3. 与 AMP 配合时，`scaler.step` 也只需在累积满的那一步调用"
+    },
+    {
+      "h": "ZeRO-1：优化器状态分片",
+      "md": "8 卡数据并行，每张卡都存一份完整的 Adam 状态——8 份冗余。**ZeRO-1（Zero Redundancy Optimizer, stage 1）** 把优化器状态沿参数维度切成 8 份，每卡只持有 1/8：\n\n| 切的东西 | Stage | 显存节省 |\n|---|---|---|\n| 优化器状态（Adam 动量/方差） | ZeRO-1 | ≈4×（fp32 部分 8 分之 1）|\n| + 梯度 | ZeRO-2 | 更多 |\n| + 参数 | ZeRO-3 | 更多，通信更多 |\n\n更新时各卡用**reduce-scatter**拿到自己那片梯度，更新自己那片参数，再用 all-gather 把新参数广播出去。代价是每步多一点通信，但 GPU 算力过剩时几乎白拿。DeepSpeed 的 `config.json` 里写一行即可启用：\n\n```json\n{\n  \"train_batch_size\": 32,\n  \"gradient_accumulation_steps\": 4,\n  \"optimizer\": { \"type\": \"AdamW\", \"params\": { \"lr\": 6e-4 } },\n  \"fp16\": { \"enabled\": true }\n}\n```\n\n训练循环换成 `engine, _, _, _ = deepspeed.initialize(model, config)`，`engine.backward` / `engine.step()` 会自动处理 AMP、累积、分片。"
+    },
+    {
+      "h": "今日串联",
+      "md": "把三件套叠起来就是你未来跑任何大模型的标准姿势：**AMP 提速省显存 → 梯度累积凑有效 batch → ZeRO-1 切优化器状态上多卡**。GPT-3、LLaMA 的训练日志里全都是这三样的组合。\n\n明日实验：故意把 mini-GPT 训崩——LR 调大、fp16 溢出、脏数据各来一遍，再练「救回来」的标准动作。会救模型比会跑模型更稀缺。"
+    }
+  ],
+  "keyPoints": [
+    "Adam 优化器下每参数约 16 字节：fp32 参数 + 动量 + 方差 + 混合精度副本",
+    "AMP 关键：主权重留 fp32，算子用 fp16/bf16；fp16 需 loss scaling，bf16 不需要",
+    "梯度累积数学上严格等价大 batch：loss 除以累积步数，调度按优化器步计数",
+    "ZeRO-1 把优化器状态切片到各卡，约省 4 倍显存，代价是少量通信",
+    "DeepSpeed：engine.backward/step 封装了 AMP + 累积 + 分片逻辑"
+  ],
+  "quiz": [
+    {
+      "q": "AMP 训练中为什么主权重必须保持 fp32？",
+      "options": ["因为 GPU 只支持 fp32 更新", "因为 fp16 精度太低，微小更新量会被舍入吞掉", "为了省显存", "为了让 loss 曲线更平滑"],
+      "answer": 1,
+      "explain": "fp16 的精度约 1e-3，而单步更新常在 1e-7 量级，直接加到 fp16 权重上会被舍入为零，训练彻底停滞。"
+    },
+    {
+      "q": "用 fp16 做 AMP 时 loss scaling 的作用是？",
+      "options": ["让 loss 数值更好看", "把梯度整体放大以避免下溢，优化前再缩回", "加快收敛", "防止梯度爆炸"],
+      "answer": 1,
+      "explain": "fp16 动态范围小，小梯度会下溢成 0；先放大 S 倍搬进可表示区间，优化器拿到后除回 S。出现 inf 时框架会自动调小 S。"
+    },
+    {
+      "q": "梯度累积步数 ACCUM=4，micro-batch=8。为使梯度等价于有效 batch 32，每个 micro-batch 的 loss 应？",
+      "options": ["乘以 4", "除以 4", "保持不变", "除以 32"],
+      "answer": 1,
+      "explain": "backward 是累加的，4 次「loss/4」的梯度之和正好等于 32 个样本平均一次的梯度。"
+    },
+    {
+      "q": "ZeRO-1 切分的是哪部分显存？",
+      "options": ["模型参数", "激活值", "优化器状态（如 Adam 的动量和方差）", "输入数据"],
+      "answer": 2,
+      "explain": "Stage 1 只切优化器状态；Stage 2 再切梯度，Stage 3 连参数也切，代价是通信量增加。"
+    },
+    {
+      "q": "关于 bf16 相对 fp16 的优势，正确的是？",
+      "options": ["精度更高（尾数更多）", "动态范围与 fp32 相同，通常无需 loss scaling", "计算速度更快", "占用显存更少"],
+      "answer": 1,
+      "explain": "bf16 用 8 位指数换 7 位尾数：动态范围和 fp32 一样大，小梯度不下溢，所以一般不需要 loss scaling；代价是精度略低。"
+    },
+    {
+      "q": "梯度累积时，学习率调度（warmup/cosine）的步数应该按什么计数？",
+      "options": ["micro-batch 步数", "优化器更新步数", "epoch 数", "GPU 卡数"],
+      "answer": 1,
+      "explain": "调度应与「有效 batch 的更新次数」对齐，即每累积满一次算一步；按 micro-batch 计会让学习率提前衰减完。"
+    }
+  ]
+}

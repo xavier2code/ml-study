@@ -1,0 +1,72 @@
+{
+  "day": 118,
+  "title": "TensorRT-LLM / llama.cpp 入门",
+  "sections": [
+    {
+      "h": "两条工业推理路线",
+      "md": "上周的 vLLM 是通用 GPU 推理引擎，今天看两个极端互补的方案：\n\n- **TensorRT-LLM（NVIDIA）**：把模型编译成针对具体 GPU 架构优化的执行引擎，追求数据中心级吞吐，代价是构建慢、绑定硬件型号\n- **llama.cpp（开源社区）**：单文件 C++ 实现，跑在 CPU / Apple Metal / 消费级 GPU 上，量化全家桶，本地与边缘场景之王\n\n选型直觉：**云端批量服务**走 TensorRT-LLM / vLLM；**个人电脑、离线、隐私敏感**场景走 llama.cpp。两者一个卖极致性能，一个卖极致可移植。"
+    },
+    {
+      "h": "TensorRT-LLM 部署 demo",
+      "md": "流程三步：转换权重 → 编译引擎 → 起服务。\n\n```bash\n# 1. HF 权重转 TRT-LLM checkpoint\npython convert_checkpoint.py --model ./llama-1b \\\n    --output_dir ./ckpt --dtype float16\n\n# 2. 编译引擎（针对当前 GPU 架构，耗时数分钟）\ntrtllm-build --checkpoint_dir ./ckpt \\\n    --gemm_plugin float16 \\\n    --output_dir ./engine/llama-1b\n\n# 3. 启动 OpenAI 兼容服务\ntrtllm-serve ./engine/llama-1b\n```\n\n引擎级别带来的杀手锏：内核融合（把多算子合成一个 kernel）、**in-flight batching**（vLLM continuous batching 的 TRT 版）、paged KV cache、AWQ/FP8/INT4 KV cache 量化支持。**代价**：换 GPU 型号、改 batch 形状都可能要重新 build，灵活性远低于 vLLM——这是编译优化与运行时灵活的经典权衡。"
+    },
+    {
+      "h": "llama.cpp 量化部署",
+      "md": "llama.cpp 的世界围绕 **GGUF** 格式运转：单一文件打包权重 + tokenizer + 元数据，拷走即用。三步走：\n\n```bash\n# 1. HF 权重转 GGUF（fp16）\npython convert_hf_to_gguf.py ./llama-1b --outfile llama-1b-f16.gguf\n\n# 2. 量化到 4bit（Q4_K_M 是质量/体积甜点）\n./llama-quantize llama-1b-f16.gguf llama-1b-q4k.gguf Q4_K_M\n\n# 3. 起 OpenAI 兼容本地服务\n./llama-server -m llama-1b-q4k.gguf -c 4096 --port 8080\n```\n\n`llama-bench` 可以量化前后各测一轮吞吐与首 token 延迟。Apple Silicon 上 Metal 后端开箱即用——Mac 笔记本跑 7B Q4 模型轻松 20+ token/s，这正是本地 Agent 原型最常见的算力形态。"
+    },
+    {
+      "h": "量化到底伤了什么",
+      "md": "k-quants 的思路：把权重按块（如 256 个一组）量化，块内共享 scale，重要位数保留残差修正。直觉：LLM 权重分布尖峰集中，分块处理能吃到分布的局部性。\n\n| 量化 | 体积(7B) | PPL 变化 | 直觉 |\n|---|---|---|---|\n| FP16 | 14 GB | 基准 | 无损 |\n| Q8_0 | 7.5 GB | ≈ +0.1% | 几乎无损，首选省一半 |\n| Q4_K_M | 4.1 GB | ≈ +2–3% | 甜点，质量速度体积均衡 |\n| Q2_K | 2.7 GB | 明显上升 | 极限压体积，慎用 |\n\n经验法则：**Q8 无脑可用，Q4_K_M 起要抽查质量**（数学、代码先测），Q2 只在内存实在不够时考虑。注意 PPL 微小变化不等于能力无损——长链推理的误差会累积。"
+    },
+    {
+      "h": "选型速查与串联",
+      "md": "把本周工具放进一张决策表：\n\n| 场景 | 首选 |\n|---|---|\n| 云端 A100/H100 批量服务 | TensorRT-LLM / vLLM |\n| 云端快速迭代、多模型混部 | vLLM |\n| Mac / 无 GPU / 离线隐私 | llama.cpp |\n| 极小模型嵌入端侧 | llama.cpp Q4 + 小上下文 |\n\n对你的 Agent 项目：本地小模型（路由、改写、摘要）用 llama.cpp Q4 部署在 Mac 上零成本常驻；能力型大模型调云端 API。**混合路由**是个人 Agent 最现实的算力方案。\n\n明日预告：Week 17 复盘，画一张推理优化技术栈全景图，并写成 blog。"
+    }
+  ],
+  "keyPoints": [
+    "TensorRT-LLM：convert → build → serve 三步，内核融合 + in-flight batching + paged KV，代价是绑定 GPU 架构、构建慢",
+    "llama.cpp：GGUF 单文件 + k-quants 量化 + llama-server，CPU/Metal 消费级硬件之王",
+    "Q8_0 几乎无损可无脑用，Q4_K_M 是质量/体积甜点，Q2 明显伤质量",
+    "k-quants 按块量化共享 scale，利用 LLM 权重分布的局部性",
+    "编译优化（TRT）与运行时灵活（vLLM）是经典权衡",
+    "个人 Agent 现实方案：本地小模型 llama.cpp 常驻 + 云端大模型 API 混合路由"
+  ],
+  "quiz": [
+    {
+      "q": "TensorRT-LLM 相比 vLLM 的核心取舍是？",
+      "options": ["更便宜", "编译期针对具体 GPU 极致优化换更高吞吐，代价是灵活性差、换硬件可能要重新 build", "不需要 GPU", "不支持 batch"],
+      "answer": 1,
+      "explain": "TRT-LLM 把优化做在编译期（内核融合等），性能天花板更高，但运行时灵活性低于 vLLM 的解释执行。"
+    },
+    {
+      "q": "GGUF 格式的最大便利是？",
+      "options": ["推理更快十倍", "单文件打包权重+tokenizer+元数据，拷贝即用，跨设备分发方便", "免于量化", "只支持 NVIDIA"],
+      "answer": 1,
+      "explain": "GGUF 是自包含格式，一个文件解决权重、词表、超参元数据，本地部署与分发体验极佳。"
+    },
+    {
+      "q": "7B 模型显存/内存只有 5GB，最合理的量化选择？",
+      "options": ["FP16", "Q2_K", "Q4_K_M（约 4.1GB）", "不量化，换模型"],
+      "answer": 2,
+      "explain": "Q4_K_M 体积约 4.1GB 留给 KV cache 后基本放得下，且质量损失轻微；Q2 虽更小但质量明显下降。"
+    },
+    {
+      "q": "为什么说 PPL 只涨 0.1% 不代表量化完全无损？",
+      "options": ["PPL 测量有噪声", "长链推理（数学、多步代码）中量化误差会逐步累积，下游任务退化可能远大于 PPL 变化", "PPL 与能力无关", "量化只影响速度"],
+      "answer": 1,
+      "explain": "PPL 是逐 token 平均指标，对误差累积敏感的多步任务要单独抽查，这是量化验收的常识。"
+    },
+    {
+      "q": "k-quants（如 Q4_K_M）比朴素 4bit 均匀量化好的原因是？",
+      "options": ["用了更少的位", "按块量化并共享 scale/保留残差修正，适应权重的局部分布差异", "跳过了 attention 层", "只量化偏置"],
+      "answer": 1,
+      "explain": "权重分布尖峰集中且各区域差异大，分块处理让每块用自己的动态范围，同等位数下误差更小。"
+    },
+    {
+      "q": "个人 Agent 在 Mac 上常驻一个路由/摘要小模型，最现实的技术方案？",
+      "options": ["TensorRT-LLM 编译引擎", "llama.cpp + Q4 量化 + Metal", "训练一个新模型", "纯 CPU FP16"],
+      "answer": 1,
+      "explain": "llama.cpp 在 Apple Silicon 上 Metal 加速开箱即用，Q4 小模型内存小、速度快，适合常驻服务。"
+    }
+  ]
+}

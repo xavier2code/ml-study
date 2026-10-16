@@ -1,0 +1,101 @@
+{
+  "day": 32,
+  "title": "PyTorch nn.Module + 第一个 MLP",
+  "sections": [
+    {
+      "h": "从裸 Tensor 到 nn.Module：为什么需要框架",
+      "md": "昨天你已能用裸 Tensor + autograd 训练线性回归，为什么还要 `nn.Module`？裸写两个致命伤：**参数管理**——100 层意味着几百个 `w`、`b` 手动创建更新；**前向传播**——每层矩阵乘法手动串联，改一层要动十处。\n\n`nn.Module` 的解法是**把「参数」和「计算」打包进一个类**：参数声明为成员（`nn.Linear` 自动创建注册），前向写在 `forward()` 里——普通 Python 类，却可训练、可保存、可 GPU 迁移。核心范式：**一切模型皆 Module，Module 可嵌套 Module**——小到一层 Linear，大到 GPT。今天 30 行的 MLP 骨架放大 100 倍就是 nanoGPT 的 `GPT` 类。"
+    },
+    {
+      "h": "三大积木：Linear / ReLU / Module 组装",
+      "md": "**nn.Linear（全连接层）**：`y = xWᵀ + b`，接收 (batch, in) 返回 (batch, out)，weight 形状 (out, in)、bias 形状 (out,)，全部自动创建。\n\n**nn.ReLU（激活函数）**：非线性 max(0, x)。没有它，一百层线性层叠起来仍等价于一层——**深度失去意义**。\n\n**组装第一个 MLP**：\n\n```python\nimport torch.nn as nn\n\nclass MLP(nn.Module):\n    def __init__(self):\n        super().__init__()          # 必须调用父类初始化\n        self.fc1 = nn.Linear(784, 128)\n        self.fc2 = nn.Linear(128, 64)\n        self.fc3 = nn.Linear(64, 10)\n        self.relu = nn.ReLU()\n\n    def forward(self, x):\n        x = x.reshape(-1, 784)      # -1 自动推断批量维\n        x = self.relu(self.fc1(x))\n        x = self.relu(self.fc2(x))\n        return self.fc3(x)          # 最后一层不加激活\n```\n\n两个高频疑问：①为什么写 `model(x)` 不写 `model.forward(x)`？——`__call__` 会执行钩子等框架逻辑，永远用前者；②最后一层为何不加 ReLU？——`CrossEntropyLoss` 内置 softmax，吃原始 logits。"
+    },
+    {
+      "h": "损失与优化器：CrossEntropyLoss + Adam",
+      "md": "**损失**：多分类用 `nn.CrossEntropyLoss`，它 = log-softmax + NLL，输入是**原始 logits**（形状 (batch, 类数)）+ **整数标签**（形状 (batch,)，不是 one-hot），输出标量损失。这正是 Day 1 交叉熵的直接实现——GPT 训练用的也是它，只是类别数从 10 变成 5 万个 token。\n\n**优化器**：拿着梯度更新参数，省去手写 `w -= lr * w.grad`：\n\n```python\nimport torch.optim as optim\noptimizer = optim.Adam(model.parameters(), lr=1e-3)\n```\n\nSGD 简单纯粹、泛化常更好但要调 lr；Adam 自适应步长开箱即用（lr=1e-3 起步）。模型结构变了要重建 optimizer。"
+    },
+    {
+      "h": "训练循环：forward / loss / backward / step",
+      "md": "装进贯穿生涯的**五步循环**：\n\n```python\nfor epoch in range(20):\n    for x, y in train_loader:              # ① 取一批数据\n        logits = model(x)                  # ② 前向\n        loss = criterion(logits, y)         #    算损失\n        optimizer.zero_grad()              # ③ 清梯度（防累加）\n        loss.backward()                    # ④ 反向求梯度\n        optimizer.step()                   # ⑤ 更新参数\n```\n\n与 Day 28 手写版逐行对齐：`X @ w` → `model(x)`；手推导数 → `backward()`；`w.grad.zero_()` → `optimizer.zero_grad()`；`w -= lr * w.grad` → `optimizer.step()`。\n\n**顺序不能乱**：zero_grad 在 backward 前，step 在 backward 后。新手三大 bug：①忘 zero_grad → 损失诡异上升；②打印损失忘 `.item()`，日志全是 tensor 还占显存；③忘切 `.train()`/`.eval()`——今天无影响，dropout/BN 时代会咬人。\n\n> 用 `make_classification` 造的随机小数据把循环跑到 loss 稳定下降。能默写这五步，明天 MNIST 只是换数据。"
+    },
+    {
+      "h": "今日串联",
+      "md": "拼图归位：**nn.Module** 管参数与结构（Linear 定义层、ReLU 注入非线性、forward 串流程），**CrossEntropyLoss** 给目标（Day 1 理论落地），**optimizer** 管更新，五步循环把它们编成引擎。深度学习的「车」造好了，明天上高速：MNIST。预习：`torchvision` 下载数据、`DataLoader` 打乱分批，循环原样套用。"
+    }
+  ],
+  "keyPoints": [
+    "nn.Module 把参数注册与前向计算打包成类，Module 可嵌套 Module，GPT 类与之同构",
+    "model(x) 走 __call__ 而非 model.forward(x)；最后一层输出原始 logits 交给 CrossEntropyLoss",
+    "无 ReLU 则多层线性等价于单层——非线性赋予「深度」意义",
+    "CrossEntropyLoss = log-softmax + NLL，输入 logits + 整数标签，不是 one-hot",
+    "五步循环：取批 → 前向算损失 → zero_grad → backward → step，顺序不可乱"
+  ],
+  "quiz": [
+    {
+      "q": "如果去掉 MLP 中所有 ReLU，只堆叠 10 层 nn.Linear，结果是？",
+      "options": [
+        "模型更强因为更深",
+        "整个网络仍等价于一个线性变换，深度失去意义",
+        "无法训练",
+        "参数量变为零"
+      ],
+      "answer": 1,
+      "explain": "线性变换的复合还是线性变换：W₁₀···W₁x 仍是 x 的线性函数。非线性激活是「深度」产生表达力的前提。"
+    },
+    {
+      "q": "`nn.Linear(784, 128)` 的 weight 形状是？",
+      "options": [
+        "(784, 128)",
+        "(128, 784)",
+        "(784,)",
+        "(128,)"
+      ],
+      "answer": 1,
+      "explain": "PyTorch 约定 weight 形状为 (out_features, in_features)，前向时计算 xWᵀ；bias 是 (128,)。记反会在排查形状错误时绕弯路。"
+    },
+    {
+      "q": "使用 `nn.CrossEntropyLoss` 时，标签 y 的正确形态是？",
+      "options": [
+        "one-hot 矩阵 (batch, 10)",
+        "整数类索引的张量，形状 (batch,)",
+        "概率分布",
+        "浮点 logits"
+      ],
+      "answer": 1,
+      "explain": "CrossEntropyLoss 接收整数类索引（每样本一个 0–9 整数）；它内部完成 log-softmax，输入端也是原始 logits 而非 softmax 后的概率。"
+    },
+    {
+      "q": "训练循环中 `optimizer.zero_grad()` 的位置和原因是？",
+      "options": [
+        "放在 backward 之后，为了清掉刚算的梯度",
+        "放在 backward 之前，因为 PyTorch 梯度默认累加，不清零会混入上一轮的历史梯度",
+        "放在 step 之后，为了释放显存",
+        "可有可无，PyTorch 自动清零"
+      ],
+      "answer": 1,
+      "explain": "autograd 的梯度是累加语义（服务梯度累积等需求），每轮更新前必须手动清零，否则优化方向被历史梯度污染。"
+    },
+    {
+      "q": "调用模型做前向传播，规范写法是？",
+      "options": [
+        "model.forward(x)",
+        "model(x)",
+        "model.run(x)",
+        "forward(model, x)"
+      ],
+      "answer": 1,
+      "explain": "model(x) 触发 __call__，会执行框架注册的钩子等完整流程；直接调 forward 绕过这些机制，用 hook、量化或 JIT 时会出问题。"
+    },
+    {
+      "q": "五步循环的正确顺序是？",
+      "options": [
+        "backward → zero_grad → step → 前向",
+        "前向算损失 → zero_grad → backward → step",
+        "step → backward → 前向 → zero_grad",
+        "zero_grad → step → 前向 → backward"
+      ],
+      "answer": 1,
+      "explain": "先前向得到损失；zero_grad 在 backward 前清空旧梯度；backward 填入新梯度；step 依梯度更新。错序会导致更新用错梯度。"
+    }
+  ]
+}

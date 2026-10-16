@@ -1,0 +1,72 @@
+{
+  "day": 65,
+  "title": "分布式训练入门 (DDP)",
+  "sections": [
+    {
+      "h": "为什么单卡总有一天不够用",
+      "md": "你迟早会遇到这个时刻：换更大的模型、更大的 batch，显存直接 OOM；或者等一次实验要一整晚，而明天要跑八个实验。**分布式训练就是用更多硬件换时间（或换显存）的工程手段**。\n\n最直观的思路是「数据并行」：4 张卡，每张卡放一份**完整的模型副本**，各自吃不同的数据分片，算出各自的梯度后**汇总平均**，再各自用同一份平均梯度更新——四张卡在数学上始终等价于「单卡 + 4 倍大 batch」。\n\n数据并行之外还有两条路：**模型并行**（把一个放不下的模型切开竖着摆到多卡上）和 **流水线并行**（按层分段）。今天聚焦数据并行的标准实现 DDP，它覆盖了 90% 的日常训练场景。"
+    },
+    {
+      "h": "机制：AllReduce 是如何把梯度变平均的",
+      "md": "数据并行的核心同步原语叫 **AllReduce（全归约）**：每张卡贡献自己的梯度张量，集体运算后每张卡都拿到**所有卡梯度的平均**。直觉版：四个人各算了一部分账，AllReduce 就是「每人把账报一遍，大家同步成同一份总账的平均」。\n\n```\n卡0: g0  ┐\n卡1: g1  ├─  AllReduce(mean)  ─→  每张卡都得到 (g0+g1+g2+g3)/4\n卡2: g2  ┤\n卡3: g3  ┘\n```\n\n工程上用**环形 AllReduce（Ring）**：N 张卡排成环，梯度切成 N 块，经 2(N-1) 步传递完成——通信量与卡数无关（每卡 2×梯度大小），这让 DDP 能扩展到几十上百卡。\n\n**DDP 的加速来自重叠**：反向传播时，某层的梯度一算完就立刻发起通信，与后面层的计算重叠进行；通信发生在后台，等 backward 结束时同步多半已经完成。代价是每次迭代多一次全梯度通信——**卡越多、模型越大，通信占比越高**，扩展比永远低于 100%。"
+    },
+    {
+      "h": "代码：二十行给训练脚本加上 DDP",
+      "md": "以 CIFAR-10 + ResNet-20 两卡为例，相比单卡脚本只需五处改动：\n\n```python\nimport torch, torch.distributed as dist\nfrom torch.nn.parallel import DistributedDataParallel as DDP\n\ndist.init_process_group('nccl')                  # ① 初始化进程组\nrank   = dist.get_rank()\ntorch.cuda.set_device(rank)                       # 绑定本进程的 GPU\n\nmodel = ResNet20().cuda()\ndp_model = DDP(model, device_ids=[rank])          # ② 包一层\n\nsampler = DistributedSampler(train_set,           # ③ 数据按 rank 切分\n                             shuffle=True)\nloader = DataLoader(train_set, batch_size=256,\n                    sampler=sampler, num_workers=4)\n\nfor epoch in range(epochs):\n    sampler.set_epoch(epoch)                      # ④ 每轮重排，保证增强随机\n    for x, y in loader:\n        loss = criterion(dp_model(x.cuda()), y.cuda())\n        loss.backward()                           # DDP 自动 hook 出 AllReduce\n        ...                                       # ⑤ 只在 rank 0 打日志/存 ckpt\n```\n\n启动方式不是 `python train.py`，而是：\n\n```\ntorchrun --nproc_per_node=2 train.py\n```\n\ntorchrun 会拉起 2 个进程、注入 rank 与环境变量。**最容易踩的坑**：日志和 checkpoint 只让 `rank == 0` 执行（否则重复/冲突）；验证集**不要**切分（每张卡都评全集再 all_reduce 平均，或只让 rank 0 评）。"
+    },
+    {
+      "h": "跑通并验证：加速比、等效性检查",
+      "md": "在 CIFAR-10 上跑两个版本对比（固定总 batch，如单卡 512 vs 双卡各 256）：\n\n1. **正确性**：DDP 版与单卡大 batch 版的 loss 曲线应基本重合——DDP 的数学定义就是它\n2. **加速比**：记录每 epoch 墙钟时间，双卡理想是接近 2×，实际常见 1.6–1.8×（AllReduce 与数据加载吃掉一部分）\n3. **有效 batch 感知**：双卡各 256 等于有效 batch 512——**学习率通常需要相应放大**（线性或 √2 缩放经验法则），否则收敛变慢\n\n调试提示：卡死在第一个 step，多半是各 rank 进入了不同分支的集合通信。"
+    },
+    {
+      "h": "与 LLM 的关联：所有大模型训练的底座",
+      "md": "GPT-3 级别的训练动辄上万张 GPU，正是 DDP 的思想层层扩展的结果：数据并行（ZeRO/FSDP 把优化器状态也切分省显存）+ 模型并行 + 流水线并行组合成 3D 并行。你在两卡 CIFAR-10 上理解的「梯度同步保持数学等价」「通信与计算重叠」「rank 0 负责日志」等概念，原封不动地出现在 LLM 训练框架（DeepSpeed、Megatron-LM）里——只是 AllReduce 换成了更复杂的通信组。\n\n推理侧同理：Agent 服务里的高并发就是多副本数据并行的退化版。理解「副本间无状态、靠同步保持一致」，就理解了为什么分布式推理可以随时增减副本。"
+    }
+  ],
+  "keyPoints": [
+    "数据并行 = 模型副本 × N + 数据切分 + 梯度 AllReduce 平均，数学上等价于单卡 N 倍大 batch",
+    "环形 AllReduce 通信量与卡数无关（每卡约 2× 梯度大小），是 DDP 可扩展的基础",
+    "DDP 加速来自反向传播中梯度通信与计算的重叠；扩展比永远 < 100%",
+    "脚本五改动：init_process_group → DDP 包装 → DistributedSampler → set_epoch → rank0 独占日志/ckpt",
+    "torchrun --nproc_per_node=N 启动；验证集不切分，日志与 checkpoint 只在 rank 0",
+    "有效 batch 变大后学习率需按线性或 √N 规则放大；大模型训练 = 数据/模型/流水线并行的 3D 组合"
+  ],
+  "quiz": [
+    {
+      "q": "4 张卡数据并行，AllReduce 之后每张卡拿到的梯度是？",
+      "options": ["只有自己的梯度", "自己梯度与相邻卡梯度的平均", "全部 4 张卡梯度的平均，各卡完全一致", "随机一张卡的梯度"],
+      "answer": 2,
+      "explain": "AllReduce(mean) 保证每张卡都得到 (g0+g1+g2+g3)/4，随后各卡用同一份平均梯度更新——参数始终同步，这是 DDP 数学等价性的来源。"
+    },
+    {
+      "q": "环形 AllReduce 的关键性质是？",
+      "options": ["卡越多通信量越大", "每卡通信量约为 2× 梯度大小，与卡数无关", "不需要网络", "只能用于 2 张卡"],
+      "answer": 1,
+      "explain": "环算法把梯度分块沿环传递 2(N-1) 步，每卡发送/接收量约为 2×梯度总量，与 N 无关——这是它能扩展到上百卡的原因。"
+    },
+    {
+      "q": "DDP 能把反向传播的通信开销「藏」起来的原因是？",
+      "options": ["通信量随层数减少", "某层梯度一就绪就发起 AllReduce，与后续层的计算重叠", "GPU 有专门通信核心不占算力", "其实藏不起来"],
+      "answer": 1,
+      "explain": "DDP 在 backward 里注册 hook：每个参数桶的梯度就绪即启动异步通信，通信与剩余层的反向计算并行进行，大部分延迟被计算覆盖。"
+    },
+    {
+      "q": "以下哪项是 DDP 脚本的常见错误？",
+      "options": ["使用 DistributedSampler 切分训练集", "在所有 rank 上都写 checkpoint 文件", "sampler.set_epoch(epoch) 保证每轮重新洗牌", "只有 rank 0 打印日志"],
+      "answer": 1,
+      "explain": "所有 rank 同时写同一 checkpoint 会互相覆盖/冲突。checkpoint、日志、wandb init 都应只由 rank 0 执行；训练集切分与 set_epoch 则是正确做法。"
+    },
+    {
+      "q": "单卡 batch 256 换成 4 卡 DDP（每卡 256），为保持相近的收敛速度，通常需要？",
+      "options": ["学习率不变", "学习率除以 4", "学习率适当放大（线性或 √N 规则）", "把优化器换成 SGD 固定学习率"],
+      "answer": 2,
+      "explain": "有效 batch 从 256 变成 1024，梯度噪声变小、每步可走更大步长；经验上按线性或 √N 放大学习率并配合 warmup。"
+    },
+    {
+      "q": "关于并行策略的选择，正确的是？",
+      "options": ["模型放得下单卡时优先模型并行", "数据并行（DDP/FSDP）覆盖绝大多数日常训练，模型/流水线并行用于单卡放不下的超大模型", "流水线并行没有气泡浪费", "三种并行不能组合"],
+      "answer": 1,
+      "explain": "模型/流水线并行是「显存不够」时的手段，实现复杂；数据并行最简单通用。流水线并行存在气泡，实践中三者组合成 3D 并行。"
+    }
+  ]
+}

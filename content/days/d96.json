@@ -1,0 +1,71 @@
+{
+  "day": 96,
+  "title": "Phase 3 收尾 + mini-GPT 完整训练",
+  "sections": [
+    {
+      "h": "从「跑得通」到「跑完一个 epoch」",
+      "md": "Phase 3 前面几天都在做组件验证：单层 forward 对不对、loss 降不降。今天的目标是**完整跑完一次预训练**——mini-GPT 50M 在训练数据上过一整个 epoch（1 epoch = 每个样本恰好被看过一次）。\n\n为什么强调「跑完」：训练中段的问题（loss 平台、发散、过拟合）只有跑足够长才暴露；而「把一件事从头做到尾」的经验本身，是从教程里学不到的。50M 规模选得很讲究——小到一张消费级显卡几小时能跑完，大到足以生成连贯短句。"
+    },
+    {
+      "h": "训练前的准备清单",
+      "md": "**1. 固定随机种子与配置**：seed、lr、batch、block_size 全部写进一个 config，存进 checkpoint——三个月后你还能复现今天。\n\n**2. 数据与日志**：train.bin / val.bin 划分固定；log 每 N 步记一次 `step, train_loss, val_loss, lr, grad_norm`。nohup 或 tmux 里跑，防 SSH 断连：\n\n```bash\nnohup python train_gpt2.py --n_layer=8 --n_head=6 \\\n  --n_embd=384 --max_iters=1_epoch_steps \\\n  > run.log 2>&1 &\ntail -f run.log\n```\n\n**3. 中途检查点**：每 1000 步存一次，名字带 step——既防崩，也能事后画「训练到不同阶段」的生成样本对比。\n\n**4. 事先想好验收线**：例如「val loss 降到 X 以下、生成 200 token 内出现完整句子」。没有预设标准，训练完容易自我感觉良好。"
+    },
+    {
+      "h": "训练中盯什么",
+      "md": "盯曲线，不是盯数字。健康训练的 loss 曲线：前期快速下降，中后期变成缓慢下滑的对数曲线，grad_norm 稳定在个位数。\n\n- **train 降 val 升**：过拟合。WebText 级数据量下 50M 很难过拟合，若出现，早停在 val 最低点。\n- **loss 突然跳升后不回来**：lr 太大或溢出，回退到上个 checkpoint，lr 减半重跑。\n- **loss 一开始就不降**：数据管道 bug（如标签错位）远比超参常见。先 overfit 一个 batch——如果单 batch loss 都压不下去，模型或损失实现有错。\n\n`grad_norm` 是免费的健康指标：它反映梯度整体大小，训练发散前往往先看到 grad_norm 尖峰。nanoGPT 里 `clip_grad_norm_(params, 1.0)` 就是保险丝——梯度裁剪不改变正常训练，只在异常时刹车。"
+    },
+    {
+      "h": "生成样本：把数字变成文字",
+      "md": "训练完立刻采样，对着文字找问题比对着 loss 直观得多。采样时三个参数控制「创造性」：\n\n```python\nmodel.generate(idx, max_new_tokens=200,\n               temperature=0.8, top_k=40)\n```\n\n- `temperature` < 1 让分布更尖（保守、重复），> 1 更平（多样、胡说）\n- `top_k=40` 每步只从概率前 40 的 token 里采样，砍掉长尾噪声\n- 固定 prompt（如「The meaning of life is」），对比不同 checkpoint 的续写，能直观看到「能力随训练增长」\n\n预期：50M + 1 epoch 的产出大约是「局部通顺、无长程结构」——拼写正确、常见搭配合理、段落级逻辑漂移。这不是失败，这是规模与数据的真实刻度，记进你的实验日志。"
+    },
+    {
+      "h": "今日串联",
+      "md": "今天你完成了第一个端到端的预训练闭环：**配置 → 训练 → 监控 → 检查点 → 采样**。这个闭环与千万美元的预训练在流程上没有任何区别，差别只在规模——这正是 nanoGPT 的教学价值。\n\n对 LLM 工程的意义：以后看到「大模型训练崩了」的新闻，你能立刻列出排查清单（lr、grad_norm、数据管道、精度），因为你亲手见过缩小版的一切症状。明天复盘这四周并写成博客。"
+    }
+  ],
+  "keyPoints": [
+    "1 epoch = 每个样本恰好看一次；完整跑完一次预训练是 Phase 3 的核心验收",
+    "训练前固定 seed 与配置并存入 checkpoint，保证可复现",
+    "监控四件套：train/val loss、lr、grad_norm；发散前常有 grad_norm 尖峰",
+    "过拟合（train 降 val 升）就早停；loss 不降先查数据管道，单 batch overfit 是调试利器",
+    "采样参数：temperature 控尖度、top_k 砍长尾；固定 prompt 对比不同 checkpoint 最直观"
+  ],
+  "quiz": [
+    {
+      "q": "「训练 1 个 epoch」的确切含义是？",
+      "options": ["模型看一遍验证集", "训练数据中每个样本恰好被使用一次", "权重更新 1 次", "学习率衰减一轮"],
+      "answer": 1,
+      "explain": "epoch 是相对整个训练集的遍数；一个 epoch 内通常有成千上万次参数更新。"
+    },
+    {
+      "q": "训练中期 loss 突然跳升且不再回落，最不应该先做的是？",
+      "options": ["回退到上一个 checkpoint 并把学习率减半", "检查 grad_norm 是否出现过尖峰", "立刻把模型加深一倍", "确认是否精度溢出"],
+      "answer": 2,
+      "explain": "loss 跳升通常指向 lr/稳定性/溢出问题；加深模型既救不了发散，还会引入新变量。"
+    },
+    {
+      "q": "loss 从第一步起就不下降，优先排查什么？",
+      "options": ["数据管道（如输入标签错位）与损失实现", "换更大的词表", "多加几层 LayerNorm", "把 batch size 调大 10 倍"],
+      "answer": 0,
+      "explain": "单 batch 都 overfit 不动说明前向/损失有 bug；数据错位是这类「完全不学」的最常见原因。"
+    },
+    {
+      "q": "temperature=0.5 与 temperature=1.5 相比，生成文本通常？",
+      "options": ["0.5 更多样更混乱", "0.5 更保守、更重复；1.5 更多样、更易胡说", "两者分布完全相同", "1.5 更保守更重复"],
+      "answer": 1,
+      "explain": "温度 <1 除以 T 后 softmax 更尖，高概率 token 更占优；>1 则拉平分布，长尾 token 被采样到。"
+    },
+    {
+      "q": "训练日志里 grad_norm 的作用是？",
+      "options": ["衡量模型参数量", "反映梯度整体大小，是训练稳定性的免费健康指标", "决定学习率大小", "计算数据集大小"],
+      "answer": 1,
+      "explain": "发散前常有 grad_norm 尖峰；clip_grad_norm_ 像保险丝，正常时不干预、异常时刹车。"
+    },
+    {
+      "q": "50M 模型 1 epoch 后生成「局部通顺但无长程结构」的样本，合理判断是？",
+      "options": ["训练彻底失败，重头再来", "符合该规模与数据的预期水平，如实记录", "说明数据有毒", "说明 tokenizer 坏了"],
+      "answer": 1,
+      "explain": "拼写与局部搭配先学会、长程结构需要更多数据与规模——这是能力随规模涌现的刻度，不是 bug。"
+    }
+  ]
+}

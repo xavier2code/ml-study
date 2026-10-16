@@ -1,0 +1,101 @@
+{
+  "day": 152,
+  "title": "视频 + 语音 Agent 整合",
+  "sections": [
+    {
+      "h": "把感知拼成系统：今天搭你的旗舰 demo",
+      "md": "过去四天攒齐零件：ViT 看图、Qwen2.5-VL 看视频、Whisper/Paraformer 听话。今天组装成完整 Agent：**上传视频 → 抽关键帧 + 转写音轨 → 融合产出结构化总结 → 全程可观测**。\n\n这是多模态 Agent 的标准范式——「感知分流、汇于语言」。为什么不全塞给一个 VLM？**音轨里的信息（语气、人名、数字）视频帧里没有**，双通道覆盖率远高于单通道，成本还更低（转写便宜，逐帧视觉贵）。"
+    },
+    {
+      "h": "架构：pipeline 三段式",
+      "md": "```\n上传 mp4\n   ├─→ ffmpeg 抽音轨 ─→ VAD 切分 ─→ Paraformer 转写 ─→ 带时间戳文本\n   ├─→ 场景检测抽关键帧 ─→ Qwen2.5-VL 逐帧描述 ─→ 带时间戳画面描述\n   └──────────────┬──────────────────────────┘\n                  ▼\n        LLM 总结 Agent（时间轴对齐，融合两路）\n                  ▼\n     { 摘要 / 分段 / 关键时刻 / 行动项 }\n```\n\n关键设计决策：\n\n- **关键帧怎么抽**：用 PySceneDetect 检测镜头切换，每个镜头取中位帧——比固定 2fps 少 10 倍调用且信息不重复\n- **对齐靠时间戳**：两路输出都带 `[start-end] 秒` 标记，LLM 才能做「画面显示图表时，讲者正在说……」级别的融合\n- **总结 Agent 用普通 LLM 即可**：结构化 prompt 进、固定 JSON schema 出，前端好渲染"
+    },
+    {
+      "h": "实现：核心代码骨架",
+      "md": "```python\nimport subprocess, json\nfrom scenedetect import detect, ContentDetector\nfrom funasr import AutoModel\n\nasr = AutoModel(model=\"paraformer-zh\", vad_model=\"fsmn-vad\",\n                punc_model=\"ct-punc\")\n\ndef transcribe(video):\n  subprocess.run([\"ffmpeg\", \"-i\", video, \"-vn\", \"-ar\", \"16000\",\n                  \"-ac\", \"1\", \"tmp.wav\"], check=True)\n  return [(s[\"start\"], s[\"end\"], s[\"text\"])\n          for s in asr.generate(input=\"tmp.wav\")[0][\"sentence_info\"]]\n\ndef keyframes(video):\n  scenes = detect(video, ContentDetector())\n  return [(s[0].get_seconds(), f\"frame_{i:03d}.jpg\")\n          for i, s in enumerate(scenes)]\n\ndef summarize(video):\n  tr = transcribe(video)\n  vision = vlm_describe(keyframes(video))\n  prompt = f\"转写: {json.dumps(tr, ensure_ascii=False)}；画面: {json.dumps(vision, ensure_ascii=False)}；输出 JSON: 摘要/分段/关键时刻/行动项\"\n  return llm_json(prompt)\n```\n\n踩坑备忘：ffmpeg 抽音轨要显式 `-ar 16000 -ac 1`（重采样+单声道，ASR 硬要求）；转写分段和镜头边界天然不齐，**不要硬对齐**，让 LLM 在 prompt 里按时间就近融合；两路感知用 `asyncio` 并行，延迟减半。"
+    },
+    {
+      "h": "可观测：接入 Langfuse",
+      "md": "多模态 pipeline 失败模式隐蔽（转写对但画面错、对齐漂移、漏读某段），没有 trace 只能盲猜。Langfuse 是开源 LLM 可观测平台，接入三步：\n\n1. 自部署（docker compose）或云服务，拿 `public_key/secret_key`\n2. 装包 + 装饰：`pip install langfuse`，用 `@observe()` 装饰每个阶段函数\n3. 看板定位问题\n\n```python\nfrom langfuse.decorators import observe, langfuse_context\n\n@observe()  # 自动记录输入输出/耗时/token\ndef summarize(video):\n  tr = transcribe(video); vision = vlm_describe(keyframes(video))\n  out = llm_json(build_prompt(tr, vision))\n  langfuse_context.update_current_observation(\n      metadata={\"scenes\": len(vision)})\n  return out\n```\n\n之后每次调用在 Langfuse UI 里是一棵**嵌套 trace 树**：summarize 下挂 transcribe / vlm_describe / llm_json，耗时、token、prompt 全可见。给 trace 打用户/版本标签，就是明天 A/B 评估的数据源。"
+    },
+    {
+      "h": "与 LLM/Agent 的关联",
+      "md": "今天这个 demo 是「感知-融合-生成」的最小完整实现，生产级多模态 Agent 都是它的放大版：**专用模型感知、时间戳对齐、LLM 融合、可观测平台闭环**。\n\n两天后进入生产化：今天埋的 trace 正好变成评估数据——工程环节环环相扣。"
+    }
+  ],
+  "keyPoints": [
+    "标准范式「感知分流、汇于语言」：音频走 ASR、画面走 VLM，各自带时间戳，最后 LLM 融合——覆盖率高于单 VLM 且成本更低",
+    "关键帧用 PySceneDetect 镜头检测（每镜头取中位帧），比固定 fps 抽帧少一个量级的视觉调用",
+    "时间戳对齐是融合的锚：两路输出都带 [start-end]，交给 LLM 按时间就近融合，不硬对齐分段",
+    "ffmpeg 抽音轨必须 -ar 16000 -ac 1；转写与视觉两路 asyncio 并行可端到端减半延迟",
+    "Langfuse @observe() 装饰出嵌套 trace 树（耗时/token/prompt 全可见），打好标签即是 A/B 评估数据源"
+  ],
+  "quiz": [
+    {
+      "q": "为什么架构上「ASR 转写 + VLM 看关键帧 + LLM 融合」优于「把视频整个塞给 VLM」？",
+      "options": [
+        "VLM 不支持视频",
+        "音轨信息（人名/数字/语气）帧里没有，双通道覆盖更全，且成本更低、粒度可控",
+        "ASR 比 VLM 更快",
+        "LLM 不能处理图像"
+      ],
+      "answer": 1,
+      "explain": "「感知分流、汇于语言」：各感知通道用最擅长的模型，融合靠时间戳在语言层完成——覆盖率与成本同时占优。"
+    },
+    {
+      "q": "PySceneDetect 相比固定 2fps 抽帧的优势是？",
+      "options": [
+        "画质更高",
+        "按镜头边界抽帧，视觉调用少一个量级且信息不重复",
+        "不需要 ffmpeg",
+        "可以直接出转写"
+      ],
+      "answer": 1,
+      "explain": "镜头切换处信息变化最大；每镜头一帧既省 token 又避免同一画面反复描述。"
+    },
+    {
+      "q": "转写分段和镜头边界时间不齐，正确的处理方式是？",
+      "options": [
+        "强制四舍五入到同一网格",
+        "不硬对齐，两路都带时间戳，让 LLM 在 prompt 中按时间就近融合",
+        "丢弃无法对齐的段",
+        "重新采样视频"
+      ],
+      "answer": 1,
+      "explain": "对齐的语义匹配交给 LLM 比交给规则可靠：时间戳是共享坐标系，LLM 能处理模糊边界的就近关联。"
+    },
+    {
+      "q": "ffmpeg 抽音轨给 ASR 用，哪组参数是必须的？",
+      "options": [
+        "-vn -ar 16000 -ac 1",
+        "-vf scale=224:224",
+        "-b:a 320k",
+        "-ss 00:00:30"
+      ],
+      "answer": 0,
+      "explain": "去掉视频流（-vn）、重采样 16kHz（-ar 16000）、转单声道（-ac 1）是中文 ASR 的标准输入格式。"
+    },
+    {
+      "q": "Langfuse 的 trace 树在这个 pipeline 里最大的价值是？",
+      "options": [
+        "加速推理",
+        "把每个阶段的输入输出/耗时/token 可视化，失败模式（哪一环错）可定位，并构成评估数据",
+        "降低显存",
+        "自动修复转写错误"
+      ],
+      "answer": 1,
+      "explain": "多阶段串联系统的质量问题是分层的：trace 让你能区分「转写错/描述错/融合错」，也是后续 A/B 的证据链。"
+    },
+    {
+      "q": "总结 Agent 应该用哪个模型？",
+      "options": [
+        "必须用最大的多模态模型",
+        "普通 LLM 即可——它只需融合两路已结构化的文字信息",
+        "必须本地部署",
+        "只能用 GPT-4o"
+      ],
+      "answer": 1,
+      "explain": "感知已由专用模型完成，融合阶段只需文本推理；按成本/延迟选合适的文本 LLM，输出固定 JSON schema 便于前端渲染。"
+    }
+  ]
+}

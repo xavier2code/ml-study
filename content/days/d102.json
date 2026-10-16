@@ -1,0 +1,102 @@
+{
+  "day": 102,
+  "title": "mini-LLaMA 130M 完整实现",
+  "sections": [
+    {
+      "h": "里程碑：把四处改装装进一个模型",
+      "md": "昨天每个组件都单独测过了，今天组装成一个能前向、能反传的完整 mini-LLaMA——**Phase 4 的核心里程碑**。规模 130M：单卡可训，结构与大模型完全同构、无教学简化。\n\n配置先行——模型仓库的第一件事是 config：\n\n```python\ncfg = dict(\n    vocab_size=32000, dim=768, n_layer=12,\n    n_head=12, n_kv_head=4,        # GQA: 3 个 Q 头共享 1 组 KV\n    hidden=2048,                   # ≈ 8/3 × 768\n    max_seq_len=512, rope_theta=10000.0,\n)\n```\n\n对照 LLaMA 2 7B（dim=4096, n_layer=32, hidden=11008…）——**字段完全同名，只是数字变小**，读开源仓库等于提前预习。"
+    },
+    {
+      "h": "tokenizer：模型的嘴巴",
+      "md": "GPT-2 用字节级 BPE，LLaMA 用 **SentencePiece BPE**（词表 32K）。工程上不必从零训练，直接拿 LLaMA 的 tokenizer 用：\n\n```python\nimport sentencepiece as spm\nsp = spm.SentencePieceProcessor(model_file='tokenizer.model')\nids = sp.encode('语言模型把文本变成整数序列')\ntext = sp.decode(ids)            # roundtrip 必须无损\n```\n\n要点：①tokenizer 与模型**完全解耦**，只负责 str ↔ int[]，模型只见整数；②验证 roundtrip 无损与 `<s>`/`</s>` 特殊 token；③粗算压缩率——中文在英文为主的 32K 词表下要花 2–3 token，直接关系同样预算下中文的有效上下文长度。。"
+    },
+    {
+      "h": "组装完整模型",
+      "md": "骨架 = 词嵌入 + 12 个 LLaMABlock + 末端 RMSNorm + 与嵌入共享权重的输出头（weight tying）：\n\n```python\nclass MiniLLaMA(nn.Module):\n    def __init__(self, cfg):\n        self.tok_emb = nn.Embedding(cfg['vocab_size'], cfg['dim'])\n        self.blocks = nn.ModuleList(\n            [LLaMABlock(cfg) for _ in range(cfg['n_layer'])])\n        self.norm_f = RMSNorm(cfg['dim'])\n        self.lm_head = nn.Linear(cfg['dim'], cfg['vocab_size'], bias=False)\n        self.lm_head.weight = self.tok_emb.weight   # weight tying\n    def forward(self, idx, targets=None):\n        pos = torch.arange(idx.size(1))\n        x = self.tok_emb(idx)\n        for blk in self.blocks:\n            x = blk(x, pos)\n        logits = self.lm_head(self.norm_f(x))\n        return logits, loss\n```\n\n与 GPT-2 的三处差异：**无位置嵌入层**（RoPE 在 block 内施加于 q/k）、**末端必须 RMSNorm**（Pre-LN 收尾）、**loss 用 view 摊平**（`logits.view(-1, V)` 对 `targets.view(-1)` 算交叉熵）。参数对账：共享的嵌入+头 ≈24.5M + 12×8.5M ≈ 127M。"
+    },
+    {
+      "h": "单步 forward + 简单反向",
+      "md": "验收动线四步，全绿才算里程碑达成：\n\n1. **前向形状与 loss 量级**：随机 batch (8,256) 进去，logits (8,256,32000)，初始 loss ≈ ln(32000) ≈ 10.4——均匀分布的交叉熵，「一无所知」的熵\n2. **单步反传**：`loss.backward()` 后遍历 `named_parameters()`，断言每个 `p.grad is not None` 且 `torch.isfinite(p.grad).all()`——漏一个参数就是图断了\n3. **一步优化下降**：AdamW 走一步后重算 loss 应下降（哪怕 0.01）\n4. **单 batch overfit**：固定小 batch 训 200 步，loss 应压到 <1——压不上去说明实现有 bug，回去查 RoPE/掩码/GQA\n\n快速检查：`rope_theta` 10000→1000000，短序列输出应几乎不变；剧变说明 RoPE 施加位置错了。"
+    },
+    {
+      "h": "今日串联",
+      "md": "至此你拥有一个结构上**与 LLaMA 2 完全同构**的 130M 模型：RMSNorm、RoPE、SwiGLU、GQA、weight tying、无 bias。差异只剩数字——数字交给算力。从此 LLaMA / Mistral / Qwen 的 model.py 对你只是「换了 config 的老朋友」。\n\nPhase 4 后续在这个底座上继续：训练它、对齐它（SFT/DPO），把 Phase 3 的闭环在现代架构上重演。把四步验收全绿的结果截图存档——「能实现现代 LLM」的直接证据。"
+    }
+  ],
+  "keyPoints": [
+    "mini-LLaMA 130M ≈ dim 768 × 12 层 × 12 头（4 组 KV）× hidden 2048，字段名与 LLaMA 2 同构",
+    "tokenizer 用 SentencePiece BPE 直接加载，验证 roundtrip 无损；解耦使模型只见整数 id",
+    "与 GPT-2 的三处结构差异：无位置嵌入层（RoPE 进 block）、末端 RMSNorm、weight tying 省输出头参数",
+    "初始 loss ≈ ln(vocab) ≈ 10.4：均匀分布交叉熵，即「一无所知」的熵",
+    "验收四步：形状与 loss 量级 → 全参数有限梯度 → 一步优化下降 → 单 batch overfit",
+    "RoPE 自检：换 rope_theta 短序列输出应几乎不变，剧变说明施加位置错误"
+  ],
+  "quiz": [
+    {
+      "q": "mini-LLaMA 与 LLaMA 2 7B 的关系，最准确的说法是？",
+      "options": [
+        "结构不同的两个模型",
+        "结构完全同构，只是 dim/层数/头数等超参数不同",
+        "mini 版去掉了 GQA 和 RoPE",
+        "mini 版用不同的损失函数"
+      ],
+      "answer": 1,
+      "explain": "RMSNorm/RoPE/SwiGLU/GQA/weight tying 全部保留，字段名一致——这正是本课「用小模型学真架构」的要点。"
+    },
+    {
+      "q": "初始 loss ≈ ln(32000) ≈ 10.4 的含义是？",
+      "options": [
+        "训练出了问题",
+        "均匀分布下的交叉熵，即模型对词表一无所知时的熵",
+        "学习率太大",
+        "tokenizer 编码错误"
+      ],
+      "answer": 1,
+      "explain": "未训练模型输出均匀分布，交叉熵 = -ln(1/V) = ln V。Day 1 的熵在此落地为训练第一步的数字。"
+    },
+    {
+      "q": "weight tying（lm_head 与 tok_emb 共享权重）的作用是？",
+      "options": [
+        "提高表达能力",
+        "省掉输出头 768×32000 ≈ 2450 万参数，且嵌入训练更充分",
+        "让 RoPE 可以外推",
+        "减小梯度方差"
+      ],
+      "answer": 1,
+      "explain": "输入输出用同一组向量空间表示 token，既省参数又让词向量在两个位置共同受训。"
+    },
+    {
+      "q": "backward 后逐个检查 `p.grad` 的目的是？",
+      "options": [
+        "统计参数量",
+        "确保所有参数都接进计算图——漏一个就说明图断了",
+        "验证 loss 是否收敛",
+        "调整学习率"
+      ],
+      "answer": 1,
+      "explain": "grad 为 None 的参数不参与反传（常见原因：RoPE 缓存成常量、张量 detach），isfinite 检查同时排除 NaN 污染。"
+    },
+    {
+      "q": "固定单 batch 训 200 步 loss 压不下去，说明什么？",
+      "options": [
+        "数据太少需要更多数据",
+        "实现有 bug（RoPE/掩码/GQA 某处写错），先查代码再谈训练",
+        "模型太小",
+        "正常现象继续训"
+      ],
+      "answer": 1,
+      "explain": "单 batch overfit 是最强的实现测试——容量足够时连记忆都做不到，必是前向/反传逻辑错误。"
+    },
+    {
+      "q": "把 rope_theta 从 10000 换成 1000000，短序列前向输出应？",
+      "options": [
+        "完全不变",
+        "几乎不变（θ 只在长距离显著起作用），剧变说明 RoPE 位置施加错了",
+        "剧烈变化属正常",
+        "输出变全零"
+      ],
+      "answer": 1,
+      "explain": "更大的 theta 让高频分量更平缓，短距离旋转角变化细微；若输出剧变，多半 RoPE 被施加到了错误的张量上。"
+    }
+  ]
+}

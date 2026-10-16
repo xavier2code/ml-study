@@ -1,0 +1,90 @@
+{
+  "day": 80,
+  "title": "RMSNorm vs LayerNorm",
+  "sections": [
+    {
+      "h": "归一化层到底在干什么",
+      "md": "直觉：深层网络里，每层的输出直接叠加进残差流，数值分布会逐层漂移——某些通道越滚越大，梯度因此时大时小，训练像在颠簸的路面上开车。归一化层的职责是**每层入口处把激活拉回同一尺度**，让梯度平稳。\n\n最初的解释是「消除内部协变量偏移」，但后来的研究发现真正的原因更可能是：归一化让**损失面更平滑、有效学习率更稳定**。今天不纠结理论争论，重点是比较两种实现：LayerNorm（BERT/GPT-2 时代）与 RMSNorm（LLaMA 系列标配），亲手推导并实现后者，再实测速度差。"
+    },
+    {
+      "h": "LayerNorm 机制回顾",
+      "md": "LayerNorm 对**每个样本的每个 token 向量独立**做两步：先中心化（减均值），再标准化（除以标准差），最后用可学习的仿射参数恢复表达能力：\n\n```\nμ = (1/n) Σᵢ xᵢ\nσ² = (1/n) Σᵢ (xᵢ - μ)²\nyᵢ = (xᵢ - μ) / √(σ² + ε) · γᵢ + βᵢ\n```\n\n注意它与 BatchNorm 的区别：统计量沿**特征维**算（每个 token 自己的 n 个通道），不依赖 batch 内其他样本——因此对变长序列、小 batch 都友好。参数量 2d（γ 与 β 各 d）。PyTorch 一行 `nn.LayerNorm(d)`，ε 默认 1e-5。\n\n> 自检：为什么 Transformer 不用 BatchNorm？（答：序列长度不一、batch 统计量在自回归推理时无法对齐，且训练/推理行为不一致。）"
+    },
+    {
+      "h": "RMSNorm 数学推导：只除、不减",
+      "md": "RMSNorm（Root Mean Square Normalization，2019）观察：在足够宽的向量里，各通道的均值**本来就很小**，中心化这一步收益甚微，还白花一次归约计算。于是直接砍掉：不减均值，只用**均方根**缩放：\n\n```\nRMS(x) = √( (1/n) Σᵢ xᵢ² + ε )\nyᵢ = xᵢ / RMS(x) · γᵢ\n```\n\n三点变化：\n\n1. 去掉均值中心化——省一遍 Σ 与一遍广播减法\n2. 去掉偏置 β——参数从 2d 减半到 d\n3. 输出仍保持尺度为 1，梯度对输入更「各向同性」\n\n直觉校验：若 x 的均值恰好为 0，两种归一化只差一个 β；而高维激活近似零均值，所以两者训练效果几乎一样，但 RMSNorm 更快。实验（论文作者在 NMT/LLM 上）显示精度持平或更好——典型的「删掉冗余反而更好」。"
+    },
+    {
+      "h": "PyTorch 实现与速度实测",
+      "md": "```python\nclass LayerNorm(nn.Module):\n    def __init__(self, d, eps=1e-6):\n        super().__init__()\n        self.gamma = nn.Parameter(torch.ones(d))\n        self.beta  = nn.Parameter(torch.zeros(d))\n        self.eps = eps\n    def forward(self, x):\n        mu = x.mean(-1, keepdim=True)\n        var = x.var(-1, keepdim=True, unbiased=False)\n        return (x - mu) / torch.sqrt(var + self.eps) * self.gamma + self.beta\n\nclass RMSNorm(nn.Module):\n    def __init__(self, d, eps=1e-6):\n        super().__init__()\n        self.gamma = nn.Parameter(torch.ones(d))\n        self.eps = eps\n    def forward(self, x):\n        rms = torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)\n        return x * rms * self.gamma\n```\n\n实测方法：取 `(8, 1024, 1024)` 的输入，各前向 1000 次计时（用 `torch.cuda.Event` 或 `time.perf_counter`）。典型结果：RMSNorm 比 LayerNorm 快约 10%–30%，且**少一次归约、少一半参数**；新版 PyTorch 的 `F.rms_norm` 是融合实现，再叠 `torch.compile` 提升更明显。小模型上差距虽小，但归一化每层调 2 次、乘以几十层，收益是乘性的。\n\n注意实现细节：`var` 用有偏估计（unbiased=False）与 LayerNorm 语义一致；eps 放在根号内。"
+    },
+    {
+      "h": "Pre-Norm vs Post-Norm：位置同样重要",
+      "md": "归一化放在残差分支的**里面还是外面**，比选 LayerNorm 还是 RMSNorm 影响更大：\n\n```\nPost-Norm：  x = LN(x + Attn(x))     （原始 Transformer、BERT）\nPre-Norm：   x = x + Attn(LN(x))     （GPT-2 起、LLaMA 全系）\n```\n\nPre-Norm 让残差主路上没有任何变换，梯度可以无衰减地直通底层，深模型（几十层以上）不靠 warmup 也训得稳；代价是有效深度略降。LLaMA 的完整选择是 **Pre-RMSNorm**：位置取 Pre、算子取 RMSNorm，再加旋转位置编码 RoPE。\n\n今日串联：明天开始三天 tokenizer 马拉松——文本进入模型的第一道关卡。"
+    }
+  ],
+  "keyPoints": [
+    "LayerNorm：减均值 + 除标准差 + γβ 仿射，参数 2d，统计量沿特征维算",
+    "RMSNorm：y = x/√(mean(x²)+ε) · γ，不减均值、无 β，参数减半",
+    "RMSNorm 更快的根源：少一次归约运算，实测通常快 10%–30%",
+    "Pre-Norm 残差主路无变换、梯度直通，深模型训练稳定，GPT-2/LLaMA 均用",
+    "LLaMA 配方 = Pre-RMSNorm + SwiGLU + RoPE"
+  ],
+  "quiz": [
+    {
+      "q": "LayerNorm 的统计量（均值/方差）沿哪个维度计算？",
+      "options": [
+        "沿 batch 维（所有样本一起）",
+        "沿序列时间维（同一位置所有 token）",
+        "沿每个 token 的特征维",
+        "沿全部元素"
+      ],
+      "answer": 2,
+      "explain": "LayerNorm 对每个 token 的 d 维特征向量独立统计，不依赖 batch 与序列长度，所以适合变长序列。"
+    },
+    {
+      "q": "RMSNorm 相比 LayerNorm 删掉了什么？",
+      "options": [
+        "删掉了可学习参数 γ",
+        "删掉了均值中心化与偏置 β",
+        "删掉了 ε",
+        "删掉了非线性激活"
+      ],
+      "answer": 1,
+      "explain": "RMSNorm 只用均方根缩放：不减均值、无 β，参数从 2d 减到 d，计算也少一次归约。"
+    },
+    {
+      "q": "高维激活向量各通道均值本来接近 0，这解释了什么？",
+      "options": [
+        "RMSNorm 必须加 β 才能工作",
+        "LayerNorm 的中心化步骤近似冗余，删掉（得 RMSNorm）精度几乎不掉",
+        "LayerNorm 不能用于 Transformer",
+        "均值一定精确等于 0"
+      ],
+      "answer": 1,
+      "explain": "中心化对零均值向量几乎是恒等变换，因此 RMSNorm 省掉它几乎不损失表达力，却换来速度与更少参数。"
+    },
+    {
+      "q": "Pre-Norm 结构 x = x + Attn(LN(x)) 训练更稳的原因是？",
+      "options": [
+        "参数量更少",
+        "残差主路上没有归一化等变换，梯度可无衰减直通底层",
+        "计算量更小",
+        "不需要学习率 warmup 之外的优化器"
+      ],
+      "answer": 1,
+      "explain": "主路恒等让反向梯度沿加法链直接回传到底层，缓解深网络的梯度衰减，几十层也能稳定训练。"
+    },
+    {
+      "q": "在小模型上实测 RMSNorm 与 LayerNorm 的速度，典型结果是？",
+      "options": [
+        "LayerNorm 快一个数量级",
+        "两者完全相同",
+        "RMSNorm 快约 10%–30%，且层数越多收益累积越大",
+        "RMSNorm 只有在 GPU 上才更快"
+      ],
+      "answer": 2,
+      "explain": "RMSNorm 少一次均值归约与广播减法，单次快 10%–30%；每层两处归一化乘以几十层，收益乘性累积。"
+    }
+  ]
+}

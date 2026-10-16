@@ -1,0 +1,71 @@
+{
+  "day": 55,
+  "title": "可视化：CAM / Grad-CAM",
+  "sections": [
+    {
+      "h": "为什么需要「看见」模型在看哪里",
+      "md": "CNN 训练到 95% 准确率之后，更尖锐的问题出现了：**它到底看的是哪里？** 如果一个狗猫分类器靠图片角落的水印判断「猫」，测试集也能高分——但这是假智能。热力图（heatmap）就是回答这个问题的工具：\n\n- 调试：找到误判的真正原因（背景？水印？过曝？）\n- 信任：医疗模型圈出的病灶与医生一致，我们才敢用\n- 发现捷径学习（shortcut learning）：模型学的是数据集偏置而非任务本身\n\n今天路线：先理解 CAM（最朴素的类激活图），再推导 Grad-CAM（去掉它的限制），最后在 ResNet 上亲手实现。"
+    },
+    {
+      "h": "CAM：类激活图的原理",
+      "md": "**CAM（Class Activation Mapping）** 回答：图片每个空间位置对分类分数贡献多少？\n\n设最后卷积层输出特征图 A 有 c 个通道、空间尺寸 k×k。CAM 要求网络以「全局平均池化（GAP）+ 单层全连接」收尾：\n\n```\nS_c = Σ_k Σ_i Σ_j  w(c,k) · A(k,i,j)\n```\n\n即第 c 类分数 = 各通道特征图的加权和，w(c,k) 表示「通道 k 对类别 c 多重要」。既然每个通道是一张 k×k 的空间图，用 w(c,k) 做系数线性组合，就得到热力图：\n\n```\nCAM_c(i,j) = Σ_k w(c,k) · A(k,i,j)\n```\n\n**致命限制**：CAM 依赖「GAP + 单层全连接」这一特定结构，w(c,k) 才恰好是组合系数。VGG 改成这样可以，但 ResNet 这类自带复杂头部的网络改结构等于重训，代价太大。"
+    },
+    {
+      "h": "Grad-CAM：用梯度代替权重",
+      "md": "**Grad-CAM** 的洞察：w(c,k) 可以不重训网络就拿到——链式法则里，分数 S_c 对特征图 A 求梯度、再空间平均，正好与 GAP 后的全连接权重等价：\n\n```\nw(c,k) = (1/(i·j)) Σ_i Σ_j ∂S_c/∂A(k,i,j)\nGradCAM_c = ReLU( Σ_k w(c,k) · A(k,i,j) )\n```\n\n细节里两个门道：\n\n1. **ReLU**：只保留正贡献——我们关心「哪里支持这个类别」，负贡献对定位没帮助\n2. w 用梯度的**空间平均**而非逐像素梯度，热力图更平滑稳定\n\n优点是即插即用：任何含卷积层的网络、任何目标分数（logits、检测类别、caption 似然）都能用，**零重训**。缺点是分辨率受限于最后特征图（约 7×7 上采样放大），边界较糊。"
+    },
+    {
+      "h": "PyTorch 实现 Grad-CAM on ResNet",
+      "md": "核心两步：hook 抓取最后一个卷积层的输出与梯度，再加权求和：\n\n```python\nimport torch, torchvision.models as models\n\nmodel = models.resnet18(weights='IMAGENET1K_V1').eval()\ntarget = model.layer4[-1].conv2        # 最后一个卷积层\n\nfeats, grads = [], []\ntarget.register_forward_hook(\n    lambda m, i, o: feats.append(o.detach()))\ntarget.register_full_backward_hook(\n    lambda m, gi, go: grads.append(go[0].detach()))\n\nimg = torch.randn(1, 3, 224, 224)      # 换成预处理后的图片\nout = model(img)\nc = out.argmax(dim=1).item()\nmodel.zero_grad(); out[0, c].backward()\n\nA = feats[0]                    # (1, c, 7, 7)\nw = grads[0].mean(dim=(2,3), keepdim=True)  # (1, c, 1, 1)\ncam = torch.relu((w * A).sum(dim=1, keepdim=True))\n\ncam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)\ncam = torch.nn.functional.interpolate(\n    cam, size=(224, 224), mode='bilinear', align_corners=False)\n```\n\n实验：对同一张图分别生成「猫」「狗」两类的热力图——亮区会**不同**。这最能说服你：热力图反映的是「该类别的证据在哪」，不是通用的显著性图。"
+    },
+    {
+      "h": "与 LLM/Agent 的关联",
+      "md": "「模型看哪里」在 LLM 时代变成「注意力在看哪个 token」。Grad-CAM 与注意力可视化同属**事后解释（post-hoc explanation）**家族：\n\n- Transformer 的注意力矩阵天然是热力图——可视化后常发现模型把代词指向了错误的先行词\n- 多模态模型（如 CLIP）用 Grad-CAM 定位「这段文字对应图中哪块区域」\n- Agent 调试：看模型 attends 到哪些上下文片段，常能发现它忽略了关键约束\n\n警告：注意力权重 ≠ 因果解释（扰动注意力不一定改变输出）。解释方法本身也会「说谎」，CAM/Grad-CAM 是**起点而非终点**——这正是可解释性方向存在的理由。"
+    }
+  ],
+  "keyPoints": [
+    "CAM 要求网络以 GAP + 单层全连接收尾，热力图 = 各通道特征图按类别权重线性组合",
+    "Grad-CAM 用分数对特征图的梯度（空间平均）代替权重，任何 CNN 零重训即用",
+    "Grad-CAM 结果过 ReLU：只保留对该类别的正贡献区域",
+    "PyTorch 用 forward hook 抓特征、full backward hook 抓梯度，加权求和再上采样",
+    "热力图是事后解释的起点：注意力权重不等于因果解释"
+  ],
+  "quiz": [
+    {
+      "q": "CAM 最大的实用限制是什么？",
+      "options": ["计算太慢无法实时", "必须把网络改成 GAP + 单层全连接结构（通常意味着重训）", "只能用于分类任务", "只能用于黑白图片"],
+      "answer": 1,
+      "explain": "CAM 依赖「通道 GAP 后接全连接」这一特定结构，w(c,k) 才恰好是组合系数；改结构通常要重新训练，对 ResNet 等网络不友好。"
+    },
+    {
+      "q": "Grad-CAM 中通道权重 w(c,k) 是怎么得到的？",
+      "options": ["重新训练一个解释器网络", "类别分数对最后卷积特征图梯度做空间平均", "特征图逐像素的最大值", "随机初始化后固定"],
+      "answer": 1,
+      "explain": "w(c,k) = ∂S_c/∂A(k) 在空间维度上的平均，由链式法则它与 GAP 后接全连接时的权重等价，因此零重训即可获得。"
+    },
+    {
+      "q": "Grad-CAM 最后对组合结果施加 ReLU 的原因是？",
+      "options": ["加快计算", "把数值压到 [0,1]", "只保留对该类别的正贡献，负贡献对定位没有帮助", "防止梯度爆炸"],
+      "answer": 2,
+      "explain": "我们想要「支持这个类别的证据在哪」，ReLU 把反对该类别的负响应清零，热力图更干净地对应判别区域。"
+    },
+    {
+      "q": "同一张图片，分别对类别「猫」和「狗」生成 Grad-CAM，热力图会怎样？",
+      "options": ["完全相同，因为图片没变", "通常不同，亮区跟随各自类别的判别证据", "只有颜色不同、区域相同", "第二张会报错"],
+      "answer": 1,
+      "explain": "梯度来自不同类别的分数，各自激活对自己有利的区域——这正是 Grad-CAM 类别判别性的体现。"
+    },
+    {
+      "q": "关于把注意力权重当作解释，正确的态度是？",
+      "options": ["注意力权重是完全可靠的因果解释", "注意力可视化有诊断价值，但权重≠因果，解释方法本身也可能误导", "注意力权重没有任何参考价值", "只要准确率高就不需要解释"],
+      "answer": 1,
+      "explain": "事后解释（Grad-CAM、注意力图）能帮助调试和建立信任，但研究表明注意力与输出不一定有因果关系，应作为起点并结合其他证据。"
+    },
+    {
+      "q": "PyTorch 抓取中间层特征用于 Grad-CAM，最合适的机制是？",
+      "options": ["直接改模型源码里加 print", "register_forward_hook + register_full_backward_hook", "用 torch.save 保存整个模型", "把模型转成 ONNX"],
+      "answer": 1,
+      "explain": "hook 机制在不改动模型结构的前提下拦截前向输出与反向梯度，是 Grad-CAM 及各类特征可视化的标准做法。"
+    }
+  ]
+}

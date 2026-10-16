@@ -1,0 +1,65 @@
+{
+  "day": 51,
+  "title": "CNN 经典架构演进",
+  "sections": [
+    {
+      "h": "三部曲：1998 → 2012 → 2014",
+      "md": "CNN 的早期历史就是一部「**怎么变深**」的历史：\n\n| 架构 | 年份 | 层数 | 参数量 | 关键创新 |\n|---|---|---|---|---|\n| LeNet-5 | 1998 | 5 卷积/全连接 | 60K | 卷积+池化+全连接的祖师爷（手写数字） |\n| AlexNet | 2012 | 8 | 60M | ReLU + Dropout + GPU + 数据增强，引爆深度学习 |\n| VGG-16 | 2014 | 16 | 138M | 统一用 3×3 小 kernel 堆深度，证明「深度是王道」 |\n\n**演进主线**：参数越来越不是问题（VGG 138M），**结构和深度**才是；下一步（明天的 ResNet）就是解决「怎么继续加深而不退化」。"
+    },
+    {
+      "h": "LeNet-5：祖师爷的精巧",
+      "md": "为手写支票识别设计（MNIST 时代），流程：\n\n```\n输入 32×32 灰度\n→ Conv 5×5×6  → 28×28×6\n→ AvgPool 2×2 → 14×14×6\n→ Conv 5×5×16 → 10×10×16\n→ AvgPool 2×2 → 5×5×16\n→ Conv 5×5×120 → 1×1×120（等于全连接）\n→ FC 84 → FC 10（输出类别）\n```\n\n今天看值得学的：**交替的卷积-池化节奏**——空间尺寸递减、通道数递增，「空间换通道」的模式延续至今。"
+    },
+    {
+      "h": "AlexNet 与 VGG：现代配方的诞生",
+      "md": "**AlexNet（2012）** 的贡献一半是架构、一半是训练配方：\n\n- **ReLU** 取代 sigmoid/tanh：不怕深层饱和，训练快数倍（当时属激进选择）\n- **Dropout 0.5**（只在全连接层）：抑制 60M 参数的过拟合\n- **数据增强**：随机裁剪 + 水平翻转，等效扩容训练集\n- **LRN**（局部响应归一化）：作用有限，已被 BN 取代\n\n**VGG-16（2014）** 的洞察极简：**全部用 3×3**。两个 3×3 堆叠的感受野 = 一个 5×5（3 层 3×3 = 7×7），参数却更少（2×9=18 vs 25）、且多了两次非线性。VGG 用「块」组织网络——若干 3×3 卷积 + 一个池化，重复堆叠；这种模块化写法直接影响了后来的 ResNet。\n\n空间每块减半（224→112→56→28→14→7），通道逐块翻倍（64→128→256→512）——这个金字塔形状是视觉网络的通用骨架。"
+    },
+    {
+      "h": "实战：AlexNet on CIFAR-10",
+      "md": "AlexNet 为 224×224 ImageNet 设计，CIFAR-10 是 32×32——直接照抄会把特征图过早压没。改法：**保留架构思想，缩小几何参数**（kernel 11→3、stride 4→1）。\n\n```python\nclass AlexNetCIFAR(nn.Module):\n    def __init__(self, num_classes=10):\n        super().__init__()\n        self.features = nn.Sequential(\n            nn.Conv2d(3, 64, 3, padding=1), nn.ReLU(),      # 32\n            nn.MaxPool2d(2),                                 # 16\n            nn.Conv2d(64, 192, 3, padding=1), nn.ReLU(),\n            nn.MaxPool2d(2),                                 # 8\n            nn.Conv2d(192, 384, 3, padding=1), nn.ReLU(),\n            nn.Conv2d(384, 256, 3, padding=1), nn.ReLU(),\n            nn.Conv2d(256, 256, 3, padding=1), nn.ReLU(),\n            nn.MaxPool2d(2))                                 # 4\n        self.classifier = nn.Sequential(\n            nn.Flatten(), nn.Linear(256*4*4, 1024), nn.ReLU(), nn.Dropout(0.5),\n            nn.Linear(1024, 512), nn.ReLU(), nn.Dropout(0.5),\n            nn.Linear(512, num_classes))\n    def forward(self, x): return self.classifier(self.features(x))\n```\n\n训练配方：SGD momentum 0.9，LR finder 定起点（约 0.05~0.1），cosine 100 epoch，CIFAR-10 约 **78~82%**；wandb config 记全 arch/lr/epochs/aug。\n\n思考题：同样的算力预算，AlexNet-CIFAR 与上周的全连接 MLP 差多少？记下两个数字——「架构先验」的量化。"
+    },
+    {
+      "h": "今日串联",
+      "md": "**LeNet** 定下卷积-池化骨架 → **AlexNet** 交付现代配方（ReLU + Dropout + 增强 + GPU）→ **VGG** 用 3×3 块证明深度与统一性。空间递减、通道递增的金字塔是三者共同的暗线。\n\n明日预告：VGG 停在了 16~19 层——再深为什么反而变差？ResNet 的残差连接如何让 152 层成为可能。"
+    }
+  ],
+  "keyPoints": [
+    "演进主线：LeNet-5(5层/60K) → AlexNet(8层/60M) → VGG-16(16层/138M)，深度与结构是核心",
+    "AlexNet 的历史地位：ReLU + Dropout + 数据增强 + GPU 训练，ImageNet 错误率 26%→15%",
+    "VGG 洞察：两个 3×3 感受野等于一个 5×5，参数更少、非线性更多；「块」的模块化写法沿用至今",
+    "视觉网络通用骨架：空间尺寸逐块减半、通道数逐块翻倍",
+    "迁移 AlexNet 到 CIFAR-10 的要点：保留架构思想，kernel 11→3、stride 4→1 适配 32×32 输入"
+  ],
+  "quiz": [
+    {
+      "q": "VGG 全部使用 3×3 kernel 而不是 5×5/7×7，核心理由是？",
+      "options": ["3×3 计算量一定更小", "堆叠的小 kernel 感受野相同但参数更少、非线性更丰富，能训得更深", "大 kernel 无法反向传播", "为了兼容 BN"],
+      "answer": 1,
+      "explain": "两个 3×3 的感受野等于一个 5×5（参数 18 vs 25），三层 3×3 等于 7×7（27 vs 49），且每层都有 ReLU；深度与小 kernel 是 VGG 的全部。"
+    },
+    {
+      "q": "AlexNet 引入 ReLU 的直接收益是？",
+      "options": ["参数减半", "避免 sigmoid/tanh 深层饱和，训练快数倍", "自动防止过拟合", "支持更大 batch"],
+      "answer": 1,
+      "explain": "正区间导数恒为 1，深层也不饱和、梯度不消失，当年让训练速度提升约 6 倍，是 AlexNet 成功的关键之一。"
+    },
+    {
+      "q": "把 AlexNet 搬到 CIFAR-10（32×32），最必要的修改是？",
+      "options": ["把输出类别从 1000 改成 10 就够了", "缩小几何参数：kernel 11→3、stride 4→1，否则特征图过早被压没", "必须去掉所有池化层", "必须换成 Adam"],
+      "answer": 1,
+      "explain": "原版第一层 11×11/stride4 加三次大池化会把 32×32 迅速压到 1 像素以下；保留「卷积-池化-全连接+Dropout」的思想、缩小几何参数即可。"
+    },
+    {
+      "q": "LeNet → VGG 的「共同暗线」指的是？",
+      "options": ["都用 sigmoid", "空间尺寸逐层递减、通道数逐层递增的金字塔结构", "参数量逐年下降", "都不用池化"],
+      "answer": 1,
+      "explain": "空间压扁换来逐级组合的语义，通道翻倍承载更多特征——这个金字塔从 LeNet 到现代视觉骨干（甚至 ViT 的 stage 设计）一脉相承。"
+    },
+    {
+      "q": "Dropout 0.5 在 AlexNet 中只放在全连接层，为什么卷积层不放？",
+      "options": ["卷积层放 dropout 会 NaN", "全连接层参数最密集、最易过拟合；卷积层权值共享本身已是一种正则", "当年 GPU 不支持", "BN 不兼容"],
+      "answer": 1,
+      "explain": "60M 参数集中在全连接层，是过拟合主战场；卷积层同 kernel 扫全图，参数共享自带正则效应，现代做法也是卷积层正则靠 BN/增强而非 dropout。"
+    }
+  ]
+}

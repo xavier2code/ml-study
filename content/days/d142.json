@@ -1,0 +1,65 @@
+{
+  "day": 142,
+  "title": "Plan-and-Execute + Tool Use",
+  "sections": [
+    {
+      "h": "直觉：导游式 Agent",
+      "md": "ReAct 是「背包客」：走一步看一步，风景好就多待，容易绕远路甚至迷路——比如查 A 时被引到 B，又从 B 跑去 C，忘了原本要干嘛。\n\n**Plan-and-Execute**（出自 Plan-and-Solve 论文，LangChain 实现著称）换一种分工：\n\n- **Planner**（导游）：先看全地图，把任务拆成一串有序子任务\n- **Executor**（游客）：逐步执行，每个子任务用 ReAct 或工具调用完成\n- **Replanner**（导游返场）：执行后对照计划，决定继续、改计划还是收工\n\n适合的场景：多跳研究、批量数据处理、长流程运维——凡是**步数多、目标容易跟丢**的任务。"
+    },
+    {
+      "h": "机制：计划是数据结构，不是文本",
+      "md": "ReAct 的计划隐含在每步 Thought 里；Plan-and-Execute 把它显式拎出来，Planner 输出结构化计划：\n\n```json\n{\n  \"goal\": \"对比 A、B 两款数据库的向量检索性能\",\n  \"steps\": [\n    {\"id\": 1, \"task\": \"检索两者基准测试数据\", \"done\": false},\n    {\"id\": 2, \"task\": \"提取延迟与召回指标\", \"done\": false},\n    {\"id\": 3, \"task\": \"汇总成对比表并给结论\", \"done\": false}\n  ]\n}\n```\n\nReplanner 拿「已完成步骤 + 各步结果」重新规划，有三种出口：\n\n1. 计划仍有效 → 输出剩余步骤\n2. 某步失败/发现新信息 → **改写后续计划**（这是它比死板流水线强的地方）\n3. 目标已达成 → 输出最终答案\n\n代价也明确：多一次 LLM 调用（planner）+ 更复杂的控制流。简单两步任务用 ReAct 反而更快。"
+    },
+    {
+      "h": "实现：planner + executor 最小骨架",
+      "md": "```python\ndef run(goal):\n    plan = planner(goal)                 # LLM 调用 1：生成步骤\n    results = {}\n    for step in plan.steps:\n        out = executor(step, results)     # 每步可是一个 ReAct agent\n        results[step.id] = out\n        plan = replanner(goal, plan, results)  # LLM 调用 2：动态调整\n        if plan.finished:\n            return plan.final_answer\n    return plan.final_answer\n```\n\n三个工程要点：\n\n1. **每步独立可重试**——步骤粒度小，失败只重跑该步，不重来全局\n2. **results 显式传递**——下一步 prompt 里带上前面结果摘要，避免模型「失忆」\n3. **planner 与 executor 可用不同模型**——planner 用推理强的（拆任务难），executor 用快而便宜的（执行简单）——这是省钱的经典组合，明天 LangGraph 里会再遇到「模型分工」思想"
+    },
+    {
+      "h": "Tool Use：给 Agent 发工具箱",
+      "md": "两种任务拆得再好，没有工具照样干瞪眼。工具设计的四条军规：\n\n1. **单一职责**：`search_docs(query)` 好过 `process(action, data, mode)` 这种万能函数——模型对参数越少的工具调用越准\n2. **docstring 即说明书**：工具描述是写给 LLM 看的 prompt，写清干什么、什么时候用、参数含义、返回什么\n3. **返回要紧凑**：工具返回 50KB JSON，模型既费 token 又容易看漏；截断 + 摘要\n4. **报错要有用**：`错误：参数 date 格式应为 YYYY-MM-DD` 比一句 `failed` 让模型能自我修复\n\n> 常见误区：工具越多越好。实测工具超过 20 个，选择准确率明显下滑——大工具箱要按任务分组、按需注入。"
+    },
+    {
+      "h": "与 LLM/Agent 的关联",
+      "md": "Plan-and-Execute 与 ReAct 不是二选一，而是**嵌套关系**：外层 plan 定骨架，每步内部用 ReAct 应对意外。真实生产系统（旅行规划、深度研究类产品）几乎都是这个形态。\n\n它也暴露了新问题：planner、executor、replanner、工具状态在代码里怎么组织不成一团乱麻？这正是 Day 143 LangGraph 要解决的——用**状态机**把控制流显式画出来。今天的手写循环，明天会变成图里的节点和边。"
+    }
+  ],
+  "keyPoints": [
+    "Plan-and-Execute 三角色：planner 拆任务、executor 逐步执行、replanner 动态调整计划",
+    "计划是显式数据结构（步骤列表 + 完成状态），Replanner 三种出口：继续/改计划/收工",
+    "适合步数多、易跟丢的任务；简单任务 ReAct 更快（省 planner 调用）",
+    "工具设计军规：单一职责、docstring 写给 LLM、返回紧凑、报错可指导自我修复",
+    "工具并非越多越好：>20 个工具选择准确率下滑；外层 plan + 内层 ReAct 是生产标配嵌套"
+  ],
+  "quiz": [
+    {
+      "q": "Plan-and-Execute 相比 ReAct 最大的改进是？",
+      "options": ["token 消耗更少", "先全局规划再执行，长任务不跟丢目标", "不需要工具", "永远更快"],
+      "answer": 1,
+      "explain": "ReAct 走一步看一步，长任务容易偏航；planner 先给出全貌，replanner 还能中途纠偏。代价是多了规划调用，简单任务反而更慢。"
+    },
+    {
+      "q": "Replanner 在某步失败后最合理的动作是？",
+      "options": ["宣布整体失败", "根据失败原因改写剩余步骤（如换一个数据源）后继续", "跳过失败步骤假装成功", "从头重新执行全部步骤"],
+      "answer": 1,
+      "explain": "动态重规划是这套范式的灵魂：保留已完成的成果，只调整后续路径；全部推倒重来是最贵的选项。"
+    },
+    {
+      "q": "关于 planner 和 executor 的模型选择，省钱又保质的长组合是？",
+      "options": ["两个都用最贵的模型", "planner 用推理强的大模型，executor 用快而便宜的小模型", "两个都用最便宜的模型", "随机选择"],
+      "answer": 1,
+      "explain": "拆任务需要强推理；执行单步任务通常简单，小模型足以胜任——按难度分工是 Agent 系统的标准省钱姿势。"
+    },
+    {
+      "q": "设计工具 `search_docs(query: str, top_k: int) -> list`，以下哪个描述最有利于 LLM 正确调用？",
+      "options": ["描述为「搜索」两个字", "写明：在私有文档库做语义检索；query 用完整问句；top_k 默认 5，最多 20；返回 (标题, 摘要, 分数) 列表", "描述越学术越详细，含算法推导", "不写描述，靠模型猜"],
+      "answer": 1,
+      "explain": "工具描述是给模型的说明书：用途、参数语义、返回结构说清楚，调用准确率最高；过短靠猜、过长淹没重点都不好。"
+    },
+    {
+      "q": "工具返回 50KB 的完整 JSON，主要问题是？",
+      "options": ["没有问题，多多益善", "token 成本高且模型容易看漏关键信息，应截断或摘要后返回", "会损坏模型", "违反 HTTP 协议"],
+      "answer": 1,
+      "explain": "上下文里塞满原始数据既贵又降低注意力质量；紧凑的结构化摘要（如 top 3 字段）是工具返回设计的常规做法。"
+    }
+  ]
+}

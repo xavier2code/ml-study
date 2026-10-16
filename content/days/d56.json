@@ -1,0 +1,71 @@
+{
+  "day": 56,
+  "title": "Week 8 复盘 + 整理训练框架",
+  "sections": [
+    {
+      "h": "复盘：CNN 这一周学到什么",
+      "md": "Week 8 走完了 CNN 的完整闭环，先合上书回忆主线（回忆比重读有效十倍）：\n\n1. **卷积**：局部连接 + 权值共享，平移等变的归纳偏置\n2. **池化与感受野**：层层堆叠后顶层单元「看到」整张图\n3. **经典架构**：VGG 堆叠、ResNet 残差连接解决退化问题\n4. **数据增强**：小数据集上往往比换模型更划算\n5. **迁移学习**：冻结骨干 + 换头微调，几十张图也能训分类器\n6. **可视化**：Grad-CAM 看见模型的证据\n\n今天正事：**把散落在 notebook 里的训练代码沉淀成可复用模板**——这是从「跑通 demo」到「拥有工程能力」的分水岭。"
+    },
+    {
+      "h": "为什么要模板化",
+      "md": "这一周你大概写了五六次几乎相同的训练循环：每次改模型、改数据、其余复制粘贴。复制粘贴的真正问题是**错误会复制**——上次的 bug 溜进所有实验，且行为不一致导致实验不可比。\n\n一个好模板的目标：\n\n- 换数据集、换模型只改**配置**，不改训练逻辑\n- 训练/验证/保存自动一致，实验可追溯（config + seed + 结果都落盘）\n- 接口稳定，Week 9 的 RNN、Phase 3 的 GPT 直接复用\n\n设计哲学一句话：**模型、数据、训练器三者解耦**。"
+    },
+    {
+      "h": "模板结构：model / data / train / eval 四件套",
+      "md": "单文件骨架（拆包同理），四个组件各自独立：\n\n```python\n# 1) data —— 统一吐 (x, y) 批次\ndef get_loaders(cfg):\n    tr, va = build_datasets(cfg)\n    return (DataLoader(tr, cfg.batch, shuffle=True, drop_last=True),\n            DataLoader(va, cfg.batch))\n\n# 2) model —— 由 cfg 决定结构\ndef build_model(cfg):\n    return resnet18(num_classes=cfg.num_classes)  # 按 cfg.arch 选择\n\n# 3) train —— 唯一一份训练循环\ndef train_one_epoch(model, loader, opt, dev):\n    model.train()\n    for x, y in loader:\n        x, y = x.to(dev), y.to(dev)\n        opt.zero_grad(set_to_none=True)\n        F.cross_entropy(model(x), y).backward()\n        opt.step()\n\n@torch.no_grad()\ndef evaluate(model, loader, dev):\n    model.eval(); correct = total = 0\n    for x, y in loader:\n        pred = model(x.to(dev)).argmax(1).cpu()\n        correct += (pred == y).sum().item(); total += len(y)\n    return correct / total\n\n# 4) main —— 组装 + 保存最佳模型\ndef main(cfg):\n    dev = 'cuda' if torch.cuda.is_available() else 'cpu'\n    model = build_model(cfg).to(dev)\n    opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr)\n    tr, va = get_loaders(cfg); best = 0.0\n    for _ in range(cfg.epochs):\n        train_one_epoch(model, tr, opt, dev)\n        if (acc := evaluate(model, va, dev)) > best:\n            best = acc\n            torch.save(model.state_dict(), cfg.ckpt)\n```\n\n三个易漏细节：`model.train()` 与 `model.eval()` 成对出现（影响 BN/Dropout）；保存 `state_dict` 而非整个模型对象；验证集上用 `@torch.no_grad()` 省显存又提速。"
+    },
+    {
+      "h": "配置与实验管理",
+      "md": "把所有超参数收进一个 dataclass（arch / data / batch / lr / epochs / ckpt 六个字段），实验就变成「改配置」；再约定每次运行把 `cfg.__dict__` 连同最终指标 `json.dump` 进 `runs/时间戳.json`——一周后你有十几个实验时，会感谢这个习惯。进阶（选做）：早停、学习率调度、W&B 日志。"
+    },
+    {
+      "h": "写 blog：CNN 的 7 天 + 与 LLM 训练的呼应",
+      "md": "最后 1 小时写《CNN 的 7 天》，求**把知识按自己的话重组**。提纲：卷积为什么适合图像 → 感受野堆叠 → 残差连接 → 迁移学习 → Grad-CAM 的发现。\n\n你会发现这套模板与 LLM 训练同构：\n\n| 组件 | CNN 分类 | GPT 预训练 |\n|---|---|---|\n| data | (图片, 标签) | (token 序列, 下一个 token) |\n| loss | 交叉熵（类别） | 交叉熵（词表） |\n| train 循环 | 完全相同 | 完全相同 |\n| eval | 准确率 | loss / 困惑度 |\n\nnanoGPT 的 `train.py` 本质就是这份模板去掉图像特化、加上混合精度与梯度累积。明天进入 Week 9：序列建模，从 RNN 到注意力。"
+    }
+  ],
+  "keyPoints": [
+    "训练模板把 model / data / train / eval 四块解耦，换实验只改配置不改逻辑",
+    "model.train() 与 model.eval() 必须成对出现，影响 BN 与 Dropout 行为",
+    "保存 state_dict 而非模型对象；验证用 @torch.no_grad()",
+    "每个实验落盘 config + seed + 指标，实验才可追溯可比",
+    "CNN 分类训练循环与 GPT 预训练循环同构，loss 都是交叉熵"
+  ],
+  "quiz": [
+    {
+      "q": "「把训练代码模板化」最主要的价值是？",
+      "options": ["代码行数更少", "消除复制粘贴导致的错误传播，保证实验间可比、可追溯", "运行速度更快", "能支持更大的模型"],
+      "answer": 1,
+      "explain": "复制粘贴会让同一个 bug 溜进所有实验且行为不一致；统一模板让换数据/模型只改配置，实验结果可复现可比较。"
+    },
+    {
+      "q": "忘写 `model.eval()` 最可能造成的后果是？",
+      "options": ["显存溢出", "BatchNorm 使用验证批统计量、Dropout 仍然随机丢弃，验证指标不稳定且偏低", "梯度变成 NaN", "无法保存模型"],
+      "answer": 1,
+      "explain": "BN/Dropout 在两种模式下行为不同：忘切 eval 会让验证结果带随机噪声，往往低估真实性能。"
+    },
+    {
+      "q": "保存模型推荐 `torch.save(model.state_dict())` 而不是 `torch.save(model)`，因为？",
+      "options": ["文件更小可以打包整个项目", "state_dict 只存权重，加载时不依赖构建模型时的类定义路径，更稳健可移植", "state_dict 保存更快", "整个模型无法保存"],
+      "answer": 1,
+      "explain": "pickle 整个 model 对象会把类结构一起序列化，代码重构后常加载失败；state_dict 是纯权重字典，配合重建的模型加载最稳。"
+    },
+    {
+      "q": "模板中验证阶段加 `@torch.no_grad()` 的作用是？",
+      "options": ["提高验证准确率", "不构建计算图，省显存且提速", "让 BatchNorm 正常工作", "防止过拟合"],
+      "answer": 1,
+      "explain": "验证不需要反向传播，关闭梯度追踪可释放中间激活对应的显存并加快前向；对精度本身无影响。"
+    },
+    {
+      "q": "以下哪个实践最能让「两周后的你」看懂今天的实验？",
+      "options": ["把实验结果截图存在桌面", "每次运行把 config、seed、最终指标写入 runs/ 目录留存", "凭记忆回忆调了哪些参数", "把 notebook 重命名为 final_final_v2"],
+      "answer": 1,
+      "explain": "配置 + 随机种子 + 指标的结构化留存让任何实验可复现、可对比，是最基本的实验管理纪律。"
+    },
+    {
+      "q": "CNN 分类模板迁移到 GPT 预训练，需要改的核心是？",
+      "options": ["训练循环结构", "数据侧（token 序列 + next-token 目标）与模型，循环骨架与交叉熵思想不变", "优化器原理", "必须换 GPU"],
+      "answer": 1,
+      "explain": "训练循环骨架通用；变化在数据管道（序列化、下一样本即标签）与模型结构，损失仍是交叉熵，只是类别换成了词表。"
+    }
+  ]
+}

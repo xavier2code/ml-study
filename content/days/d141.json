@@ -1,0 +1,71 @@
+{
+  "day": 141,
+  "title": "ReAct + Reflexion",
+  "sections": [
+    {
+      "h": "直觉：为什么需要「边想边做」",
+      "md": "普通 LLM 调用是**一锤子买卖**：prompt 进、答案出，模型没有机会获取新信息。但在真实任务里——查今天的股价、算一笔账、检索私有文档——答案不在参数里，必须**行动**。\n\n两个极端都不行：\n\n- 只想不做（Chain-of-Thought）：模型会一本正经地编造「搜索结果」\n- 只做不想：没有推理规划，工具调用东一榔头西一棒\n\n**ReAct**（Reasoning + Acting）把两者交织：想一步 → 做一步 → 观察 → 再想。这就是 Agent 的最小心智模型。"
+    },
+    {
+      "h": "机制：ReAct 循环的四种消息",
+      "md": "论文里的轨迹只有四种角色，无限循环直到得出答案：\n\n```text\nThought: 我需要先查作者\nAction: search[某某作者代表作品]\nObservation: 搜索返回 5 部作品……\nThought: 信息够了，现在可以回答\nFinal Answer: ……\n```\n\n**Thought** 是模型的显式推理（也是你调试时最该看的东西）；**Action** 是工具调用（本文格式是 `工具名[参数]`）；**Observation** 由外部环境（不是模型）写回；循环往复。\n\n关键设计：Observation 来自真实世界，把模型的推理**锚定**在事实上——这是它比纯 CoT 幻觉少的根本原因。\n\n### Reflexion：失败之后照镜子\n\nReAct 轨迹失败怎么办？**Reflexion** 增加一层自省：把失败的轨迹 + 失败原因总结成一段「经验」，放进下一轮尝试的 prompt 里：\n\n```text\nReflexion: 上次失败因为没检查年份单位。\n下次记得：确认财报数据是季度还是年度。\n```\n\nAgent 带着教训重试，相当于把「错题本」写进上下文。"
+    },
+    {
+      "h": "例子：手写一个 40 行的 ReAct agent",
+      "md": "不用任何框架，理解 ReAct 只需要这段骨架：\n\n```python\nhistory = [user_question]\nfor step in range(MAX_STEPS):\n    out = llm(REACT_PROMPT + \"\\n\".join(history))\n    history.append(out)\n    if \"Final Answer:\" in out:\n        return out\n    action = parse_action(out)          # 如 search[x]\n    obs = TOOLS[action.name](action.arg)\n    history.append(f\"Observation: {obs}\")\nhistory.append(\"失败了，总结教训再试一次\")  # Reflexion 入口\n```\n\n三个工程要点：\n\n1. **MAX_STEPS 死循环保险丝**——模型可能永远「再查一下」，必须强制截断\n2. **parse_action 要宽容**——模型偶尔输出多余空格或中英混排，解析失败就把报错当 Observation 喂回去，它会自我纠正\n3. prompt 里给 1–2 个完整示例轨迹（few-shot），格式稳定性天差地别"
+    },
+    {
+      "h": "与 LLM/Agent 的关联",
+      "md": "ReAct 是后来一切 Agent 框架的祖师爷：LangChain 的 AgentExecutor、OpenAI 的 function calling，本质都是把 `Action: search[x]` 换成了结构化的 JSON 工具调用，循环骨架一模一样。\n\n对照你的 Phase 5 路线：明天 Plan-and-Execute 解决 ReAct「走一步看一步、容易绕远」的问题；Day 144 的 Function Calling 把 Action 从文本协议升级为协议化 JSON；Day 146 的 AgentBench 里大量基准就是拿 ReAct 当基线。\n\n> 记忆点：**Agent = LLM + 工具 + 循环 + 记忆**。ReAct 给出循环，Reflexion 给出记忆（从失败中学习的记忆）。"
+    },
+    {
+      "h": "今日练习",
+      "md": "1. 用上面的骨架实现一个带 `search`（调你 Day 140 的 RAG 服务）和 `calculator` 两个工具的 ReAct agent\n2. 给它出 10 道需要多步的题，统计：成功率、平均步数、失败在哪一步\n3. 任选一道失败题，手工给 Reflexion 层写一条教训，验证重试能否翻盘\n\n明日预告：任务复杂时先列计划再执行——Plan-and-Execute 范式。"
+    }
+  ],
+  "keyPoints": [
+    "ReAct = Thought → Action → Observation 交替循环，Observation 由环境写回，锚定事实",
+    "Reflexion：失败轨迹总结成文字教训存入上下文，下轮重试时带上——文本版错题本",
+    "工程三件事：MAX_STEPS 保险丝、宽容的 action 解析、few-shot 示例轨迹",
+    "现代 function calling 是 ReAct 的结构化版本，循环骨架相同",
+    "Agent 公式：LLM + 工具 + 循环 + 记忆"
+  ],
+  "quiz": [
+    {
+      "q": "ReAct 相比纯 Chain-of-Thought 的根本优势是？",
+      "options": ["模型参数量更大", "Observation 由真实环境写回，推理被事实锚定，减少编造", "不需要 prompt 工程", "推理步数总是更少"],
+      "answer": 1,
+      "explain": "纯 CoT 里模型只能凭参数记忆「想象」搜索结果；ReAct 把真实工具返回作为 Observation 注入，推理建立在事实上。"
+    },
+    {
+      "q": "ReAct 循环中 `Observation:` 这一行是谁写的？",
+      "options": ["LLM 生成", "外部环境/工具执行结果回填", "用户填写", "随机生成"],
+      "answer": 1,
+      "explain": "Observation 是工具的真实返回，由代码拼回 history，不由模型生成——这是防止模型自导自演的关键约束。"
+    },
+    {
+      "q": "Reflexion 机制的核心做法是？",
+      "options": ["用 RL 更新模型权重", "把失败原因总结成文字放入下一轮上下文，带教训重试", "更换更大的模型", "增加工具数量"],
+      "answer": 1,
+      "explain": "Reflexion 是上下文内学习（不改权重）：自省文本相当于长期记忆，跨 episode 复用。"
+    },
+    {
+      "q": "手写 ReAct agent 时设置 MAX_STEPS 的主要目的是？",
+      "options": ["节省 token 费用仅此而已", "防止模型陷入「再查一下」式无限循环，强制终止并触发反思", "提高准确率", "让运行更快"],
+      "answer": 1,
+      "explain": "截断既是保险丝也是 Reflexion 的入口：到步数上限即视为一次失败，进入总结教训→重试的循环。"
+    },
+    {
+      "q": "如果 parse_action 解析模型输出失败，最好的处理是？",
+      "options": ["直接抛异常终止", "把解析错误信息作为 Observation 喂回去让模型自我纠正", "静默跳过该步", "随机选一个工具执行"],
+      "answer": 1,
+      "explain": "把错误当环境反馈是 Agent 设计的通用模式：模型看到格式错误的后果后，下一步通常能输出正确格式。"
+    },
+    {
+      "q": "现代框架（LangChain、OpenAI function calling）与 ReAct 的关系是？",
+      "options": ["完全不同的思想", "把 ReAct 的文本 Action 协议升级为结构化 JSON 工具调用，循环骨架一致", "ReAct 的替代品，不再有循环", "只用于代码生成"],
+      "answer": 1,
+      "explain": "Action: search[x] → {\"name\": \"search\", \"arguments\": {...}}，从正则解析脆弱协议进化为可靠的结构化协议。"
+    }
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "day": 57,
+  "title": "RNN 原理",
+  "sections": [
+    {
+      "h": "从「一张图」到「一串词」",
+      "md": "CNN 假设输入是一整块空间结构；但语言、语音、股价是**序列**——「我喜欢猫」和「我不喜欢猫」只差一个字，意思反转。前馈网络把输入当无序向量，天然不适合顺序敏感的数据。\n\n循环神经网络（RNN）核心想法：**把上一步的输出存下来，作为下一步输入的一部分**——网络带记忆。直到 Transformer 前，它统治所有序列建模（LSTM、Seq2Seq），也是 LLM「上下文」概念的历史起点。"
+    },
+    {
+      "h": "前向：同一个单元，展开成链",
+      "md": "每个时间步 t，RNN 读取当前输入 xₜ 与上一步隐状态 hₜ₋₁：\n\n```\nhₜ = tanh(W_xh · xₜ + W_hh · hₜ₋₁ + b)\nyₜ = W_hy · hₜ + b_y\n```\n\n关键点：**所有时间步共享同一套参数**——句子 10 个词还是 10000 个词，参数量不变。数学上等价于沿时间「展开」（unroll）成同权重的超深前馈链。\n\nh 是**压缩的记忆摘要**：把「至今读过的内容」塞进一个固定维向量，像读书笔记每读一词更新一次。三种拓扑：one-to-many（图生 caption）、many-to-one（情感分类）、many-to-many（语言模型，每步出一个分布）。今天实现第三种。"
+    },
+    {
+      "h": "反向传播：BPTT 与梯度问题",
+      "md": "训练时把展开的链当超深前馈网络做标准反向传播——**沿时间反向传播（BPTT）**。hₜ 对 h₀ 的依赖链是 Π(W_hh·diag(tanh'(·))) 的连乘：\n\n- 若 W_hh 的谱范数 > 1，梯度随步数**指数放大** → 梯度爆炸，loss 变 NaN\n- 若 < 1，梯度**指数衰减到 0** → 梯度消失，远处信息学不到\n\n直觉：第 1 个词要影响第 100 步，梯度要穿过 99 次连乘，太脆弱。\n\n应对：**梯度裁剪** `clip_grad_norm_`（范数压到阈值内）基本解决爆炸；消失问题裁不掉，明天 LSTM 用门控 + 细胞状态绕开。所以 RNN 实际能学的依赖约几十步——这正是 LSTM 的动机。"
+    },
+    {
+      "h": "PyTorch 字符级语言模型",
+      "md": "任务：读文本，学会「给定前文预测下一个字符」（chars/stoi/itos 建表略）。数据用 next-token 通用技巧——**目标就是输入右移一位**：\n\n```python\nids = torch.tensor([stoi[c] for c in text])\nB, T = 16, 64\ndef get_batch():\n    ix = torch.randint(0, len(ids)-T-1, (B,))\n    x = torch.stack([ids[i:i+T] for i in ix])\n    y = torch.stack([ids[i+1:i+1+T] for i in ix])  # 右移一位\n    return x, y\n```\n\n模型用最朴素的 `nn.RNN`：\n\n```python\nclass CharRNN(nn.Module):\n    def __init__(self, vocab, hidden=256):\n        super().__init__()\n        self.emb = nn.Embedding(vocab, hidden)\n        self.rnn = nn.RNN(hidden, hidden, batch_first=True)\n        self.head = nn.Linear(hidden, vocab)\n    def forward(self, x, h=None):\n        out, h = self.rnn(self.emb(x), h)\n        return self.head(out), h   # out:(B,T,vocab) 每步一个分布\n```\n\n训练循环照搬昨天的模板，只加一行梯度裁剪：`nn.utils.clip_grad_norm_(model.parameters(), 1.0)`（放 backward 与 step 之间）。\n\n采样生成：从空状态起逐字符预测，把 h 在步间**手动传递**：\n\n```python\n@torch.no_grad()\ndef sample(model, n=500, temp=0.8):\n    model.eval(); ids = torch.zeros(1,1, dtype=torch.long); h = None\n    for _ in range(n):\n        logits, h = model(ids[:, -1:], h)\n        nid = torch.multinomial((logits[0,-1]/temp).softmax(-1), 1)\n        ids = torch.cat([ids, nid.view(1,1)])\n    return ''.join(itos[i] for i in ids[0].tolist())\n```\n\n预期现象：能拼单词、懂常见搭配、近似配对引号，但长句结构混乱——256 维 tanh 单位的记忆撑不了长依赖。"
+    },
+    {
+      "h": "与 LLM 的关联",
+      "md": "这个 demo 是 GPT 的**最小雏形**：同样的 next-token 目标、同样的采样生成、同样的交叉熵损失。差别在「记忆机制」：\n\n| | CharRNN | GPT |\n|---|---|---|\n| 上下文载体 | 单个 hₜ 循环更新 | 全部历史 token 直接进入注意力 |\n| 长依赖 | 连乘衰减，几十步 | 一步直达（路径 O(1)） |\n| 训练并行 | 逐步串行 | 整个序列并行 |\n\nRNN 的串行性导致训练慢——注意力取代它的工程理由之一。Transformer 出现前，LSTM 统治 NLP 十年（明天）。理解 RNN 的失败模式，才能理解 Transformer 标题为何强调「Attention Is All You Need」。"
+    }
+  ],
+  "keyPoints": [
+    "RNN 前向：hₜ = tanh(W_xh·xₜ + W_hh·hₜ₋₁ + b)，所有时间步共享参数",
+    "展开视角：RNN 等价于同权重超深前馈网络，BPTT 即展开后的反向传播",
+    "W_hh 连乘导致梯度爆炸（裁剪可解）与梯度消失（需改结构，LSTM）",
+    "next-token 数据构造：目标序列 = 输入序列右移一位",
+    "梯度裁剪 clip_grad_norm_ 是 RNN 训练标配；采样时 h 需逐步传递"
+  ],
+  "quiz": [
+    {
+      "q": "RNN「所有时间步共享参数」直接带来的好处是？",
+      "options": ["训练时不需要反向传播", "参数量与序列长度无关，且对相同模式在不同位置的出现有天然泛化", "隐状态维度可以任意大", "不需要激活函数"],
+      "answer": 1,
+      "explain": "权重共享让模型学到「模式」本身而非位置绑定——第 3 个词学到的规律在第 300 个词同样适用，参数量也固定。"
+    },
+    {
+      "q": "BPTT 指的是？",
+      "options": ["把 RNN 沿时间展开后，当作深前馈网络做标准反向传播", "一种特殊的优化器", "把梯度截断只训一步", "把序列倒序输入"],
+      "answer": 0,
+      "explain": "Backpropagation Through Time：展开成计算链后照常 autograd，PyTorch 的动态图让这件事自动发生。"
+    },
+    {
+      "q": "梯度裁剪（gradient clipping）解决的是 BPTT 中的哪个问题？",
+      "options": ["梯度消失", "梯度爆炸", "过拟合", "局部最优"],
+      "answer": 1,
+      "explain": "裁剪把过大的梯度范数压回阈值内，防止 loss 变 NaN；对梯度消失无能为力，那需要 LSTM 这类结构改造。"
+    },
+    {
+      "q": "字符级语言模型的训练目标 y 与输入 x 的关系是？",
+      "options": ["y 与 x 完全相同（自编码）", "y 是 x 右移一位（每个位置预测下一个字符）", "y 是 x 倒序", "y 是随机采样的字符"],
+      "answer": 1,
+      "explain": "next-token 建模：位置 t 的目标就是位置 t+1 的字符，一份序列错位即成监督信号，GPT 预训练同样如此。"
+    },
+    {
+      "q": "训练 200 步后，字符级 RNN 生成文本最可能的形态是？",
+      "options": ["通顺的长段落", "能拼出单词和局部搭配，但长句结构和逻辑混乱", "完全随机字符", "逐字复述训练集"],
+      "answer": 1,
+      "explain": "tanh 循环单元只能维持短程记忆：字符级统计规律（拼写、常见词组）能学会，跨越几十步的依赖学不到，符合梯度消失的预言。"
+    },
+    {
+      "q": "相比 RNN，Transformer 在长依赖上的根本优势是？",
+      "options": ["参数更多所以更强", "任意两个位置之间信息路径长度 O(1)，且训练可全序列并行", "不需要激活函数", "不需要大量数据"],
+      "answer": 1,
+      "explain": "注意力让任意 token 对直接交互，避开 W_hh 连乘；同时抛弃逐步递推，序列维度可并行训练，工程与建模双重优势。"
+    }
+  ]
+}

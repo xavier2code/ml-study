@@ -1,0 +1,72 @@
+{
+  "day": 120,
+  "title": "FlashAttention 1/2 深入",
+  "sections": [
+    {
+      "h": "标准 attention 慢在哪",
+      "md": "标准 attention 三步：`S = QKᵀ` → `P = softmax(S)` → `O = PV`。问题不在 FLOPs（矩阵乘 GPU 最擅长），而在**访存**：\n\n- S 和 P 是 N×N 矩阵（N=4096 时 float16 占 32MB/head），SRAM 放不下，必须写回 HBM 再读回来\n- HBM 带宽比 SRAM 低一个数量级以上，中间矩阵的往返搬运把算力单元全饿死了\n\n结论：attention 是 **memory-bound**（对 decode 如此，对训练时的大 N 同样成立）。优化方向不是算得更快，而是**少搬数据**。这就是 FlashAttention 的出发点：让 N×N 矩阵根本不落地。"
+    },
+    {
+      "h": "FlashAttention：tiling + online softmax",
+      "md": "两个组件拼起来解决「不落地」：\n\n**1. tiling（分块）**：Q、K、V 各切成小块装进 SRAM，块内完成 S=QKᵀ、softmax、PV 的小规模计算，输出 O 也分块累积。任何时刻 SRAM 里只有一个小块，N×N 矩阵从未被完整物化。\n\n**2. online softmax（增量 softmax）**：softmax 需要全局的 max 和 sum，分块后怎么办？答案是用**运行中的统计量**增量修正：\n\n```\n处理新块：m_new = max(m_old, m_block)\nl_new = l_old · e^(m_old - m_new) + l_block · e^(m_block - m_new)\nO_new = O_old · (l_old/l_new) · e^(m_old-m_new) + O_block · (l_block/l_new)\n```\n\n每来一块，旧统计量按新旧 max 的差**重新缩放**再合并——数学上与一次性 softmax 完全等价，显存却从 O(N²) 降到 O(N)。"
+    },
+    {
+      "h": "手算 online softmax",
+      "md": "拿 [1, 2] 和 [3, 4] 两块亲手算一遍（e ≈ 2.718，e⁻¹ ≈ 0.368）：\n\n```\n块A [1,2]：m_A = 2, l_A = e^(1-2) + e^(2-2) = 0.368 + 1 = 1.368\n块B [3,4]：m_B = 4, l_B = e^(3-4) + e^(4-4) = 1.368\n\n合并：m = max(2,4) = 4\nl = l_A·e^(2-4) + l_B·e^(4-4)\n  = 1.368×0.135 + 1.368×1 = 0.185 + 1.368 ≈ 1.553\n\n直接算验证：e^(1-4)+e^(2-4)+e^(3-4)+e^(4-4)\n            = 0.0498+0.1353+0.3679+1 ≈ 1.553 ✓\n```\n\n关键是 `l_A·e^(2-4)` 这一步：max 从 2 涨到 4，旧的分母和输出要整体乘 e^(2-4) **降权**再并进新统计量。attention 输出 O 的合并同理（标量公式可直接搬用）。理解了这个合并，你就理解了 FlashAttention 的全部数学。"
+    },
+    {
+      "h": "FlashAttention 2 的改进",
+      "md": "FA1 解决了「不落地」，FA2 解决「并行度与开销」：\n\n- **减少非 matmul 运算**：softmax rescale 等标量操作占比下降，GEMM 占比提升（论文数字：非 matmul FLOPs 减半），实际加速 ≈2×\n- **沿序列维并行**：FA1 只在 batch×head 维并行，长序列、小 batch 时 SM 数量吃不饱；FA2 把序列也切成并行块，长文本训练利用率大增\n- **warp 分工优化**：FA1 里 4 个 warp 各算 O 的一部分再共享同步；FA2 让每个 warp 持有完整的 O 行块，K/V 跨 warp 广播，寄存器内完成、同步开销大减\n- **跳过全零块**：因果掩码下，下三角约一半的 QKᵀ 计算被整块跳过（FA1 也做，FA2 划分方式让跳过更自然）\n\n一句话：FA1 是算法创新（不物化+online softmax），FA2 是工程精进（并行与访存的再平衡）。"
+    },
+    {
+      "h": "今日串联",
+      "md": "FlashAttention 教的通用一课：**IO 感知的算法设计**——复杂度分析只看 FLOPs 是不够的，访存层次（SRAM/HBM）才是现代硬件上算法真实成本的决定因素。同样的思路后来出现在一切大模型基础设施里（Mamba 的 scan 融合、MoE 的 all-to-all 优化）。\n\n使用层面几乎是免费的：\n\n```python\nimport torch.nn.functional as F\nout = F.scaled_dot_product_attention(q, k, v, is_causal=True)\n# PyTorch 自动选 flash / mem-efficient / math 后端\n```\n\n对 Agent 的意义：长上下文（几十 K 历史）的 prefill 成本被 FlashAttention 直接压下来——长上下文 Agent 才从「不可用」变「可用」。明天看它在 Hopper 硬件上的后继者 FA3/FA4。"
+    }
+  ],
+  "keyPoints": [
+    "标准 attention 的瓶颈是 N×N 中间矩阵在 HBM 的往返，不是 FLOPs",
+    "FlashAttention = tiling（SRAM 内分块计算，N×N 不落地）+ online softmax（运行 max/sum 增量合并）",
+    "online softmax 合并公式：l_new = l_old·e^(m_old-m_new) + l_block·e^(m_block-m_new)，与一次 softmax 严格等价",
+    "显存 O(N²) → O(N)；FA2 减半非 matmul FLOPs、沿序列维并行、warp 分工重设计，再快 ≈2×",
+    "通用启示：算法设计必须感知存储层次，IO 决定真实成本",
+    "工程上用 F.scaled_dot_product_attention 即可自动受益"
+  ],
+  "quiz": [
+    {
+      "q": "标准 attention 训练时的真正瓶颈是？",
+      "options": ["矩阵乘 FLOPs 太多", "N×N 中间矩阵写回 HBM 再读回的访存往返", "softmax 数值不稳定", "显存不够放 V 矩阵"],
+      "answer": 1,
+      "explain": "S、P 矩阵过大只能落 HBM，而 HBM 带宽比 SRAM 低一个数量级以上，算力单元在等数据。"
+    },
+    {
+      "q": "FlashAttention 中 tiling 的核心作用是？",
+      "options": ["提高数值精度", "Q/K/V 分块装进 SRAM 计算，N×N 矩阵从未被完整物化", "减少参数量", "支持更大 batch"],
+      "answer": 1,
+      "explain": "分块让所有中间量都停留在小块规模上，SRAM 内完成计算，访问 HBM 的次数从 O(N²) 级降到 O(N) 级。"
+    },
+    {
+      "q": "online softmax 中处理完块A[1,2]后来了块B[3,4]，旧分母 l_A 要如何处理？",
+      "options": ["直接丢弃", "乘以 e^(m_A - m_new) 降权后再并入新统计量", "乘以 2", "重新计算全部元素"],
+      "answer": 1,
+      "explain": "全局 max 从 2 涨到 4，所有旧指数项相对缩小 e^(2-4)，所以旧分母与旧输出都要按此因子重缩放再合并，结果才与一次 softmax 等价。"
+    },
+    {
+      "q": "FlashAttention 2 相比 FA1 「沿序列维并行」解决了什么问题？",
+      "options": ["短序列训练太慢", "长序列、小 batch 时 batch×head 维度太少，GPU SM 吃不饱", "显存占用太大", "精度不够"],
+      "answer": 1,
+      "explain": "FA1 的并行度 = batch×head，长文本训练时这个数可能远小于 SM 数量，序列维切分补上了并行度缺口。"
+    },
+    {
+      "q": "FlashAttention 给长上下文 Agent 带来的直接收益是？",
+      "options": ["生成更聪明", "长 prompt 的 prefill 显存和速度都被压下来，几十 K 上下文从不可用变可用", "省 API 费", "自动压缩历史"],
+      "answer": 1,
+      "explain": "prefill 显存 O(N²)→O(N)、速度数倍提升，长上下文的成本曲线被整体压低，这是长历史 Agent 的工程前提。"
+    },
+    {
+      "q": "「IO 感知的算法设计」这一课的准确含义是？",
+      "options": ["算法好坏只看访存不看 FLOPs", "复杂度分析要纳入存储层次，FLOPs 少但访存多的算法在真实硬件上可能更慢", "GPU 上所有算法都该用 tiling", "HBM 比 SRAM 快"],
+      "answer": 1,
+      "explain": "FlashAttention 的 FLOPs 并没减少，赢在访存结构；只看计算量的复杂度分析在现代硬件上会误导算法选择。"
+    }
+  ]
+}

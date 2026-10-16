@@ -1,0 +1,101 @@
+{
+  "day": 100,
+  "title": "LLaMA 架构：RMSNorm + RoPE + SwiGLU + GQA",
+  "sections": [
+    {
+      "h": "从 GPT-2 到 LLaMA：一张改装清单",
+      "md": "LLaMA 的骨架仍是「嵌入 + N 个 decoder block + 末端归一化 + 输出头」，与 GPT-2 一致，但有四处现代化改装：\n\n| 组件 | GPT-2 | LLaMA | 改什么 |\n|---|---|---|---|\n| 归一化 | LayerNorm | **RMSNorm** | 去均值中心化，只做缩放 |\n| 位置编码 | 可学习绝对嵌入 | **RoPE** | 旋转相对位置，可外推 |\n| FFN | GELU 两层 | **SwiGLU** | 三层门控结构 |\n| 注意力 | MHA | **GQA** | 多个 Q 头共享一组 KV |\n\n速记：RMSNorm 省算省参、RoPE 管外推、SwiGLU 换表达力、GQA 砍 KV cache（明天拆）。先单独测组件，再组装。"
+    },
+    {
+      "h": "RMSNorm：LayerNorm 的减法",
+      "md": "LayerNorm 做两件事：减均值 + 除标准差。RMSNorm 的观察是：**减均值贡献很小，砍掉几乎不掉点**，还省掉一次均值计算：\n\n```python\nclass RMSNorm(nn.Module):\n    def __init__(self, dim, eps=1e-6):\n        self.weight = nn.Parameter(torch.ones(dim))\n    def forward(self, x):\n        rms = x.pow(2).mean(-1, keepdim=True) + self.eps\n        return x * torch.rsqrt(rms) * self.weight\n```\n\n注意它**没有 bias**——LLaMA 全线去 bias（线性层也无），7B 级别省下的计算与参数可观。测试：给输入加任意均值，输出几乎不变（它不看均值）。"
+    },
+    {
+      "h": "RoPE：用旋转编码相对位置",
+      "md": "绝对位置嵌入的毛病：位置间无结构（5/6 与 5/100 的嵌入同样「远」），且训练长度外无法泛化。RoPE 的思路：**把每对维度当二维向量按位置旋转**——q 旋转 mθ、k 旋转 nθ，点积只留**相对角 (m−n)θ**：\n\n```python\ndef rope(x, pos, base=10000.0):   # x: (B,T,H,D)\n    d = x.shape[-1]\n    freqs = 1.0 / (base ** (torch.arange(0, d, 2) / d))\n    ang = torch.outer(pos, freqs)        # (T, D/2)\n    cos, sin = ang.cos(), ang.sin()\n    x1, x2 = x[..., 0::2], x[..., 1::2] # 相邻维配对后旋转\n    # out[2i] = x1·cos − x2·sin; out[2i+1] = x1·sin + x2·cos\n```\n\n二维特例：q=(1,0) 旋转 mθ 后与位置 n 的 k 点积 = cos((m−n)θ)——**只依赖距离 m−n**。好处：无参数、随距离平滑、低频 θ 可外推。测试：同距离不同绝对位置的注意力分数应相同。"
+    },
+    {
+      "h": "SwiGLU：会自我把关的 FFN",
+      "md": "GPT-2 的 FFN 是「放大 4× → GELU → 投回」。SwiGLU 改成**三条路**：一条算门控、一条过 SiLU、相乘后投回：\n\n```python\nclass SwiGLU(nn.Module):\n    def __init__(self, dim, hidden):\n        self.w_gate = nn.Linear(dim, hidden, bias=False)\n        self.w_up   = nn.Linear(dim, hidden, bias=False)\n        self.w_down = nn.Linear(hidden, dim, bias=False)\n    def forward(self, x):\n        return self.w_down(F.silu(self.w_gate(x)) * self.w_up(x))\n```\n\nSiLU(x) = x·σ(x)，平滑且负半轴小幅通过。门控乘法的直觉——**每个隐维自己决定放行多少**，比「先激活再无差别投影」多一维乘性交互。代价是三个矩阵，为保持参数量持平，hidden 从 4d 调到约 8d/3。测试：w_gate 置 0 则输出恒 0（门关死）。"
+    },
+    {
+      "h": "组装 LLaMA Block + forward 验证",
+      "md": "GQA 今天用最简形式占位（明天拆）：`n_kv_head < n_head` 且为约数，注意力前把每个 KV 头 `repeat_interleave` 到对应 Q 头组。\n\n```python\nclass LLaMABlock(nn.Module):\n    def __init__(self, cfg):\n        self.ln1, self.ln2 = RMSNorm(cfg.dim), RMSNorm(cfg.dim)\n        self.attn = GQA(cfg.dim, cfg.n_head, cfg.n_kv_head)\n        self.mlp = SwiGLU(cfg.dim, cfg.hidden)\n    def forward(self, x, pos):\n        x = x + self.attn(self.ln1(x), pos)  # RoPE 只进 q/k\n        x = x + self.mlp(self.ln2(x))\n        return x\n```\n\n**测试清单**：①因果性——位置 t 之后的输入换随机数，之前位置输出逐位不变；②形状 (B,T,C) 守恒；③RoPE 只施加 q/k，v 不旋转；④参数量与 `sum(p.numel())` 对账。全过之后明天拆透 GQA，Day 102 组装 130M。"
+    }
+  ],
+  "keyPoints": [
+    "LLaMA = GPT-2 骨架 + 四改装：RMSNorm / RoPE / SwiGLU / GQA，且全线去 bias",
+    "RMSNorm = LayerNorm 砍掉均值中心化：x·rsqrt(mean(x²))·weight，省算省参",
+    "RoPE 按位置旋转 q/k，点积只留相对角 (m−n)θ：无参数、编码相对距离、可外推",
+    "SwiGLU 三矩阵门控：w_down(SiLU(w_gate x)·w_up x)，hidden 取 8d/3 保持参数量",
+    "Block 测试四件套：因果性逐位不变、形状守恒、RoPE 只进 q/k、参数量对账"
+  ],
+  "quiz": [
+    {
+      "q": "RMSNorm 相比 LayerNorm 省掉了什么？",
+      "options": [
+        "缩放因子 weight",
+        "均值中心化（减均值）步骤",
+        "eps 数值稳定项",
+        "最后一维归一化"
+      ],
+      "answer": 1,
+      "explain": "RMSNorm 只按均方根缩放，不减均值；实验发现掉点可忽略，换来更少计算与参数。"
+    },
+    {
+      "q": "RoPE 让注意力度量只依赖相对位置的关键机制是？",
+      "options": [
+        "给每个位置学一个独立向量加到 token 上",
+        "q 按位置 m 旋转、k 按位置 n 旋转，点积只剩 (m−n) 的相对角",
+        "把位置 id 做 one-hot 拼接",
+        "用卷积核提取局部位置特征"
+      ],
+      "answer": 1,
+      "explain": "旋转矩阵正交：R(mθ)q · R(nθ)k = q · R((m−n)θ)k，绝对位置在点积中抵消，只剩相对角。"
+    },
+    {
+      "q": "SwiGLU 用 hidden = 8d/3 而不是 4d 的原因是？",
+      "options": [
+        "8/3 比 4 计算更快",
+        "三个矩阵比两个多一个，缩减 hidden 使总参数量与原 FFN 大致持平",
+        "为了让激活函数更好收敛",
+        "受显存对齐限制"
+      ],
+      "answer": 1,
+      "explain": "门控结构引入第三条投影路，按 3×(8d/3)d ≈ 2×4d·d 保持参数预算不变（LLaMA 论文设定）。"
+    },
+    {
+      "q": "SiLU 激活函数的表达式是？",
+      "options": [
+        "max(0, x)",
+        "x·σ(x)",
+        "σ(x)",
+        "x²"
+      ],
+      "answer": 1,
+      "explain": "SiLU（swish）= x·sigmoid(x)：平滑、非单调、负半轴小幅放行，是 SwiGLU 的门控激活。"
+    },
+    {
+      "q": "验证 decoder block 因果性的正确做法是？",
+      "options": [
+        "检查 loss 是否下降",
+        "把位置 t 之后的输入替换为随机数，t 之前位置的输出应逐位不变",
+        "对比参数量",
+        "看注意力图是否为对角矩阵"
+      ],
+      "answer": 1,
+      "explain": "因果掩码保证未来 token 不影响过去输出；扰动下游输入、观测上游输出不变是最直接的逐位检验。"
+    },
+    {
+      "q": "RoPE 在 LLaMA block 中施加于哪些张量？",
+      "options": [
+        "q、k、v 都旋转",
+        "只旋转 q 和 k，v 不旋转",
+        "只旋转 v",
+        "旋转残差流 x"
+      ],
+      "answer": 1,
+      "explain": "旋转只需出现在点积发生处（q·k）即可注入相对位置；v 携带内容信息，旋转无必要。"
+    }
+  ]
+}

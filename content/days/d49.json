@@ -1,0 +1,65 @@
+{
+  "day": 49,
+  "title": "Week 7 复盘 + 训练监控",
+  "sections": [
+    {
+      "h": "Week 7 复盘：调参三件套",
+      "md": "本周攒齐了调参三件套：\n\n- **LR finder**（Day 47）：一次指数扫略定位 best LR，warmup + cosine / one-cycle 调度\n- **初始化**（Day 48）：方差守恒 → Xavier（tanh）与 Kaiming（ReLU），以及 BN 时代初始化为何宽容\n- 加上更早的正则化（dropout / weight decay / early stopping）\n\n自检问题：LR 曲线在哪个区域取值？为什么 Kaiming 的方差是 Xavier 的两倍？答不上来就回看两天内容——下周进入 CNN，这些是地基。\n\n今天的主题是把训练从「黑盒祈祷」变成**可观测系统**：出问题时能在几分钟内定位是 LR、初始化、数据还是过拟合。"
+    },
+    {
+      "h": "wandb / tensorboard 完整接入",
+      "md": "训练日志解决「loss 到底降没降、降得健康吗」的问题。两个主流工具：\n\n- **wandb**：云端，自动收集超参数/git commit/系统指标，团队协作与 sweep 调参方便\n- **tensorboard**：本地，PyTorch 原生支持好，零配置\n\nwandb 最小接入：\n\n```python\nimport wandb\nwandb.init(project='cifar10-week7', config={\n    'lr': 0.1, 'epochs': 100, 'optimizer': 'SGD', 'arch': 'cnn-v3'})\nfor epoch in range(epochs):\n    for xb, yb in loader:\n        loss = train_step(model, xb, yb)\n        wandb.log({'train/loss': loss, 'train/lr': cur_lr})\n    wandb.log({'val/acc': evaluate(model, val_loader)})\n```\n\n习惯：**config 里记全所有超参数**（LR、调度、增强、种子、架构版本），几周后翻旧实验时这是唯一的救命稻草。tensorboard 的 `SummaryWriter` 用法几乎相同（`writer.add_scalar`），本地 `tensorboard --logdir runs` 即可查看。"
+    },
+    {
+      "h": "训练监控三件套：loss / grad / weight histogram",
+      "md": "光看 loss 不够。写一个 monitor，每 N 个 batch 记录三类信号：\n\n**1. loss 曲线（train + val 同图）**：train 降 val 不降 → 过拟合；两者都不降且高 → 欠拟合或 bug；loss 突然飙升 → LR 过大或数据异常。\n\n**2. 梯度范数与分层梯度直方图**：\n\n```python\ntotal_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1e9)\nwandb.log({'grad/norm': total_norm})\nfor name, p in model.named_parameters():\n    if p.grad is not None:\n        wandb.log({f'grad_hist/{name}': wandb.Histogram(p.grad.cpu())})\n```\n\n分层看直方图：某层梯度方差比别的层小几个数量级 → 该层「死了」（初始化/激活函数问题）；梯度范数持续增大 → 走向爆炸，该降 LR 或加 clip。\n\n**3. 权重/激活直方图**：`wandb.Histogram(p.data)` 看 Weight 分布随时间的漂移；BN 的 running_mean/var 也在监控清单里。初始化实验（Day 48）的正统验证方法就是看每层激活方差是否水平——今天把这件事工具化。"
+    },
+    {
+      "h": "读图诊断手册",
+      "md": "把常见病和曲线特征对应起来（这张表是今天最值钱的产出）：\n\n| 症状 | 曲线特征 | 处方 |\n|---|---|---|\n| LR 过大 | loss 震荡/飙升，grad norm 尖峰 | 降 LR，加 warmup |\n| LR 过小 | loss 缓慢线性下降 | 升 LR 或换调度 |\n| 过拟合 | train 降、val 回升 | 增强数据/正则/early stop |\n| 梯度消失 | 深层直方图逐年「缩水」 | 检查初始化/换激活/加残差 |\n| 梯度爆炸 | grad norm 指数上升 | grad clip（如 1.0）、降 LR |\n| 死 ReLU | 某层激活全 0 | 降 LR、换 LeakyReLU |\n\n> LLM 关联：微调时的标准操作完全一样——盯 train/eval loss 是否分离（过拟合信号）、grad norm 是否平稳、加 grad clip（1.0 几乎是标配）。学会在小模型上读这些图，将来 debug 7B 微调是同一套肌肉。"
+    },
+    {
+      "h": "今日串联",
+      "md": "训练监控 = **log 一切，分层看**：loss/acc 曲线定大方向，梯度范数与直方图找层级异常，权重直方图看长期漂移。wandb 记 config + 指标，让每次实验可追溯。至此 Week 7 收官：找 LR、懂初始化、会观测。\n\n明日预告：Week 8 开篇——卷积到底在算什么，为什么它天生适合图像。"
+    }
+  ],
+  "keyPoints": [
+    "wandb.init 的 config 记全超参/种子/架构版本，是几周后翻实验的唯一凭据",
+    "监控三件套：loss 曲线（train+val 同图）、分层梯度直方图、权重/激活直方图",
+    "train 降 val 不降 = 过拟合；双不降 = 欠拟合或 bug；loss 飙升 = LR 过大",
+    "某层梯度比别层小几个数量级 → 该层死了（初始化/激活问题）；grad norm 持续增大 → 爆炸前兆",
+    "clip_grad_norm_ 顺带返回总梯度范数，一举两得；LLM 微调的 grad clip ≈ 1.0 是标配"
+  ],
+  "quiz": [
+    {
+      "q": "train loss 持续下降但 val loss 回升，最可能是？",
+      "options": ["学习率过大", "过拟合", "梯度消失", "初始化不当"],
+      "answer": 1,
+      "explain": "模型开始记忆训练集细节而泛化变差，是典型过拟合；处方是数据增强/正则化/early stopping，而不是调 LR。"
+    },
+    {
+      "q": "监控发现第 15 层的梯度直方图方差比第 1 层小三个数量级，最可能的诊断是？",
+      "options": ["学习率太小", "梯度在深层衰减（消失），检查初始化/激活函数", "数据增强太强", "batch 太大"],
+      "answer": 1,
+      "explain": "逐层连乘把梯度指数级缩小，深层几乎收不到学习信号——正是 Xavier/Kaiming 要解决的问题，也可能是激活函数饱和导致。"
+    },
+    {
+      "q": "`clip_grad_norm_` 在训练循环里除了裁剪还能免费提供什么信息？",
+      "options": ["当前学习率", "总的梯度范数（返回值）", "参数量", "验证准确率"],
+      "answer": 1,
+      "explain": "把 max_norm 设一个很大的值（如 1e9），裁剪不生效，但返回值就是全局梯度范数，可直接 log 进监控面板。"
+    },
+    {
+      "q": "为什么 wandb.init 的 config 要记全超参数、种子和架构版本？",
+      "options": ["为了界面美观", "几周后复现/对比旧实验时这是唯一凭据", "加速训练", " wandb 强制要求"],
+      "answer": 1,
+      "explain": "调参后期要对比几十个 run，缺一个字段（如真实 LR 或调度方式）就无法解释差异；wandb 也会顺带记录 git commit。"
+    },
+    {
+      "q": "loss 曲线剧烈震荡并出现尖峰，梯度范数同步飙高，首选处方是？",
+      "options": ["增大 batch 到整个数据集", "降低学习率并加 warmup", "把模型加深一倍", "去掉所有 dropout"],
+      "answer": 1,
+      "explain": "震荡 + 梯度尖峰是大步长越过谷底的典型形态：先降 LR，warmup 保护初期；必要时再加 grad clip。"
+    }
+  ]
+}

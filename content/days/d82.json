@@ -1,0 +1,90 @@
+{
+  "day": 82,
+  "title": "手写 BPE Tokenizer",
+  "sections": [
+    {
+      "h": "目标：一个不调包的完整 tokenizer",
+      "md": "昨天你已经训练出了 `merges` 规则表，但「训练」只是三件事里的一件。一个能用的 tokenizer = **train（学合并规则）+ encode（文本 → id 序列）+ decode（id 序列 → 文本）**。今天把另外两块亲手写完，再用 tiktoken 当标准答案对齐验证。\n\n为什么值得手写：encode 的贪心合并顺序里藏着一个反直觉的坑（很多人会写错），decode 里有一个必须处理的边界情况（多字节字符被切断）。写过一遍，以后调试任何 tokenizer 问题都有底气。全程只用 Python 标准库 + 一个计数器。"
+    },
+    {
+      "h": "encode：按 rank 贪心合并",
+      "md": "直觉陷阱：编码时应**按照训练时的合并顺序，从最早学到的规则开始逐条扫描应用**吗？错。正确做法是：每一步在**当前序列的所有相邻对里，找 merge 序号（rank）最小的那一对**先合并，循环到没有可合并的对为止。\n\n```\nwhile 存在相邻对 (a,b) 出现在 merges:\n    pair = rank 最小的相邻对\n    把序列中所有该 pair 合并\n```\n\n为什么这样才对：训练时先学的规则是「在更早的语境下」成立的；编码若按全局顺序盲扫，可能先用一条晚学的规则吞掉了本该属于早规则的字节。\n\n```python\ndef encode(text, merges):\n    ids = list(text.encode('utf-8'))\n    while len(ids) >= 2:\n        pairs = set(zip(ids, ids[1:]))\n        best = min(pairs, key=lambda p: merges.get(p, float('inf')))\n        if best not in merges:\n            break\n        ids = merge(ids, best, merges[best])\n    return ids\n```\n\n复杂度 O(len²) 最坏情况，教学够用；tiktoken 用 Rust + 优先队列做同样的事，快几个数量级。"
+    },
+    {
+      "h": "decode：字节流与坏序列",
+      "md": "解码方向简单直接：每个 id 映射回它的字节串，拼接后按 UTF-8 解码。但有一个**必须处理的边界情况**：\n\n```python\ndef decode(ids, vocab):\n    raw = b''.join(bytes([i]) if i < 256 else vocab[i] for i in ids)\n    return raw.decode('utf-8', errors='replace')\n```\n\n`errors='replace'` 不能省：一个汉字占 3 字节，若上游把序列切断（比如你自己手工改了几个 id），拼出的字节流可能不是合法 UTF-8——严格模式直接抛异常，replace 会输出 � 占位。这是**模型生成 garbage token 时界面仍能显示**的原因。\n\n> 自检：把 encode 后的序列任意改掉一个 id，再 decode，观察发生了什么。（答：可能整段乱码，也可能只坏一个字符——取决于改动是否落在多字节字符中间。）"
+    },
+    {
+      "h": "对照 tiktoken 验证正确性",
+      "md": "tiktoken 是 OpenAI 的生产级实现，用它当标准答案有两种玩法：\n\n**1. 一致性对齐**（严格）：把 tiktoken 的 gpt2 词表与合并表灌进你自己的类，对几千条文本断言 `你的 encode == tiktoken encode`。\n\n```python\nimport tiktoken\nenc = tiktoken.get_encoding('gpt2')\ntexts = ['机器学习', 'hello world', 'def f(x): return x*2']\nfor t in texts:\n    assert my_encode(t, gpt2_merges) == enc.encode(t)\n```\n\n**2. 属性验证**（无依赖）：对自己训练的 tokenizer 检查三条不变量——**roundtrip**：decode(encode(t)) == t 对任意文本成立；**无损性**：encode 输出每个 id 都在词表内；**压缩单调**：规则越多，同一段文本的 token 数不增。\n\n对齐时最容易暴露的差异是**预切分**：tiktoken 在 BPE 之前先用正则把文本切成块（字母、数字、空格、标点、汉字区段各归各类），块之间不允许合并。你的简化版没有这一步，所以同一文本的切分可能不同——这不是 bug，是工程细节的取舍。"
+    },
+    {
+      "h": "今日串联：从组件到系统",
+      "md": "两天 tokenizer 马拉松收官。你现在拥有：merge 训练循环、rank-greedy encode、安全 decode，并用 tiktoken 校准过——文本进入模型的完整链路第一次完全透明。\n\n放在大图里：tokenizer 输出的 id 序列就是 Phase 3 训练 nanoGPT 时 `inputs`/`targets` 的来源；你调试模型输出乱码时，第一件事就是 `decode` 看看 token 层面到底生成了什么。\n\n明日预告：跳出组件，看三大架构全景——BERT、GPT-2、T5 的论文各读一小时，画一张对比图。"
+    }
+  ],
+  "keyPoints": [
+    "完整 tokenizer = train（merge 规则）+ encode + decode 三件套",
+    "encode 正确姿势：每步选当前序列中 rank 最小的相邻对合并，而非按规则顺序盲扫",
+    "decode 必须用 errors='replace'：切断的多字节字符可能不是合法 UTF-8",
+    "验证三板斧：与 tiktoken 对齐、roundtrip 无损、压缩率随规则数单调不降",
+    "tiktoken 比 Python 版快几个数量级：Rust + 优先队列实现同样的贪心合并"
+  ],
+  "quiz": [
+    {
+      "q": "encode 时每一步应该合并哪个相邻对？",
+      "options": [
+        "训练时最早学到的那条规则，逐条扫完整个序列",
+        "当前序列中出现在 merges 里且 rank（合并序号）最小的对",
+        "当前序列中字节数值最大的对",
+        "随机挑一个可合并的对"
+      ],
+      "answer": 1,
+      "explain": "按当前序列动态选 rank 最小的对，才能复现训练时的合并路径；按规则表顺序盲扫可能让晚学规则先吞掉字节，切分出错。"
+    },
+    {
+      "q": "decode 为什么要用 errors='replace' 而不是严格模式？",
+      "options": [
+        "严格模式速度太慢",
+        "序列被截断或篡改后，拼接的字节流可能不是合法 UTF-8，严格模式会抛异常",
+        "replace 能提高压缩率",
+        "其实两种模式完全等价"
+      ],
+      "answer": 1,
+      "explain": "一个汉字 3 字节，若切在中间，字节流无法解码。replace 输出 � 占位，保证任何 id 序列都能显示，不崩溃。"
+    },
+    {
+      "q": "以下哪个是 roundtrip 验证的正确表述？",
+      "options": [
+        "encode(decode(t)) == t 对任意 t 成立",
+        "decode(encode(t)) == t 对任意文本 t 成立",
+        "encode 两次结果必须不同",
+        "decode 会随机替换部分字符"
+      ],
+      "answer": 1,
+      "explain": "无损 tokenizer 的核心不变量：文本 → id → 文本必须完全还原；roundtrip 失败说明实现有 bug。"
+    },
+    {
+      "q": "tiktoken 的预切分（pre-tokenization regex）的作用是？",
+      "options": [
+        "压缩文本体积",
+        "在 BPE 之前把文本切成类别块（字母/数字/空格/汉字…），限制合并范围",
+        "把所有字母转成小写",
+        "用于向量化并行加速"
+      ],
+      "answer": 1,
+      "explain": "预切分防止 BPE 跨类别合并（如把空格和标点黏成怪 token），也让规则匹配空间变小、训练更稳。"
+    },
+    {
+      "q": "你的 Python 版 encode 与 tiktoken 用同一份 merges 仍可能切分不同，最可能的原因是？",
+      "options": [
+        "Python 的整数有无限精度",
+        "缺少 tiktoken 的预切分步骤，导致跨块合并",
+        "UTF-8 与 UTF-16 的差异",
+        "tiktoken 用了 BOS token"
+      ],
+      "answer": 1,
+      "explain": "tiktoken 先用正则切块再在块内做 BPE；简化版全局合并，跨块组合可能被合上，切分自然不同。"
+    }
+  ]
+}

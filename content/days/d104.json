@@ -1,0 +1,71 @@
+{
+  "day": 104,
+  "title": "监控训练 + 调优",
+  "sections": [
+    {
+      "h": "为什么要完整接入 wandb",
+      "md": "昨天只靠肉眼盯着终端滚动数字看训练——那像开车只凭感觉不看仪表盘。今天接入 **wandb（Weights & Biases）**，把训练变成可回溯、可对比的实验记录。\n\n直觉：调参的本质是「改一个变量 → 观察 loss 曲线变化 → 归因」。没有曲线，你只能凭记忆猜；有曲线，两次实验叠在一张图上，效果一目了然。工业界所有大模型团队都这么做，个人项目也要养成习惯。\n\n与 Agent 的关联：Agent 迭代 prompt、工具配置时同样需要 A/B 曲线思维——单次跑分是噪声，趋势线才是信号。"
+    },
+    {
+      "h": "wandb 完整接入",
+      "md": "接入只需三步：\n\n```python\nimport wandb\nwandb.init(\n  project=\"minillama\",\n  config=cfg,              # 全部超参自动记录\n  name=\"run01-lr6e4-bs16k\", # 命名规则：实验号-关键变量\n)\n# 训练循环里，每 log_interval 步：\nwandb.log({\n  \"train/loss\": loss.item(),\n  \"train/lr\": lr_now,\n  \"train/grad_norm\": gn,\n  \"val/loss\": val_loss,      # 每 1000 步评估一次\n}, step=step)\n```\n\n**该记录的六类指标**：train/loss、val/loss、learning rate、grad_norm、tokens/s（吞吐）、GPU 显存峰值。\n\n两条纪律：\n\n- val loss 必须单独评估（关掉 dropout、用固定 256 个 batch），不能拿训练 batch 的 loss 冒充\n- run 的 name 里写清本次实验改了什么，否则一周后自己都看不懂"
+    },
+    {
+      "h": "读 loss 曲线：健康与异常",
+      "md": "拿到曲线先做三问：**降没降、稳不稳、val 和 train 差多少**。\n\n| 曲线形态 | 诊断 | 处理 |\n|---|---|---|\n| 平滑下降，val 略高于 train | 健康 | 继续跑 |\n| 剧烈震荡（锯齿状） | lr 太大或 batch 太小 | lr ÷2~÷3，或加大 batch |\n| train 降、val 升并持续分叉 | 过拟合（数据不够） | 加数据 / 早停 |\n| loss 突然跳升后不回来 | spike：坏数据或 lr 过大 | 回滚最近 checkpoint，降 lr 续跑 |\n| grad_norm 持续 >10 | 梯度不稳 | 检查 grad_clip 是否生效 |\n\n> 直觉：train/val 的分叉点就是模型开始「背课文」的时刻。mini 模型数据量有限，分叉是常态，目标是把分叉点推后而不是消灭它。"
+    },
+    {
+      "h": "调 LR / batch 直到 loss 下降",
+      "md": "今天的实操循环：观察 → 假设 → 改一个变量 → 验证。三个抓手：\n\n**1. LR 是第一杠杆**。loss 震荡 → lr ÷2；loss 下降太慢且 grad_norm 稳定 → lr ×1.5。GPT 系常用 6e-4（124M）到 3e-4（1B），mini 实验可大胆试。\n\n**2. batch 太小会震荡**。有效 batch（batch_size × grad_accum）建议 0.5M~1M token 量级。震荡严重先把 grad_accum 加倍，观察锯齿是否变浅。\n\n**3. 一次只改一个变量**。同时改 lr 和 batch，曲线变了你无法归因——这是实验记录的底线纪律。\n\n```python\n# 快速小实验：不要在 10 万步的大跑里调参\n# 用 2000 步的短跑对比 lr=6e-4 vs 3e-4 的 val loss\n# 择优后再投入长跑\n```\n\n典型结局：调完今天，val loss 从 6.x 稳定滑向 4.x，曲线平滑，分叉未出现——可以放心让它跑过夜。"
+    },
+    {
+      "h": "今日串联",
+      "md": "今天你把「按下回车」升级成了「驾驶舱作业」：wandb 记录六类指标，曲线异常按表对号入座，调参一次只动一个旋钮。这套监控-诊断-调整循环正是工业界训模型师的日常。\n\n明日预告：Week 15 复盘 + 训练收官——看着 val loss 走平、生成第一批样本、用 PPL 和人工抽检给第一个自己的 LLM 打分。"
+    }
+  ],
+  "keyPoints": [
+    "wandb 六类必记指标：train/val loss、lr、grad_norm、吞吐 tokens/s、显存峰值",
+    "val loss 必须单独评估（固定 batch、关 dropout），不能拿训练 loss 冒充",
+    "曲线诊断：锯齿=lr 过大/ batch 过小；train 降 val 升=过拟合；突然跳升=spike 需回滚",
+    "调参铁律：一次只改一个变量，用 2000 步短跑对比，再投入长跑",
+    "有效 batch 建议 0.5M~1M token；震荡优先调 lr，其次加 grad_accum"
+  ],
+  "quiz": [
+    {
+      "q": "train loss 持续下降，val loss 却开始上升并持续分叉。这说明什么？",
+      "options": ["学习率太小", "过拟合：模型开始背训练数据，泛化变差", "数据加载有 bug", "梯度裁剪失效"],
+      "answer": 1,
+      "explain": "train/val 分叉是过拟合的经典信号：模型在记忆训练集而不是学规律。mini 模型数据有限时常见，可加数据、早停或接受并取 val 最优 checkpoint。"
+    },
+    {
+      "q": "loss 曲线出现剧烈锯齿状震荡，最合理的第一个调整是？",
+      "options": ["把 lr 减半", "立刻换一个 tokenizer", "删掉 warmup", "把模型层数减半"],
+      "answer": 0,
+      "explain": "震荡最常见的原因是 lr 相对 batch 太大。先降 lr 观察；若仍震，再加大有效 batch（grad_accum）。一次只动一个变量。"
+    },
+    {
+      "q": "关于 wandb 的 val loss 记录，哪种做法正确？",
+      "options": ["直接复用最后一个训练 batch 的 loss 作为 val", "用固定的验证 batch 集合、关闭 dropout 单独评估，每 1000 步记一次", "只在训练结束时算一次", "取全训练集 loss 的平均"],
+      "answer": 1,
+      "explain": "训练 loss 带 dropout 噪声且不代表泛化；正确做法是固定一批 val 数据、eval 模式下定期评估，曲线才有可比性。"
+    },
+    {
+      "q": "训练中期 loss 突然跳升 1 个点后不再回落（spike），最佳处理是？",
+      "options": ["继续跑，它会自己恢复", "回滚到最近的好 checkpoint，降 lr 后续跑", "立刻清空全部数据重新开始", "把 batch size 减半"],
+      "answer": 1,
+      "explain": "持续不回落的 spike 通常意味着模型进了坏区域。回滚 checkpoint + 小幅降 lr 续跑是标准处置；干等往往浪费大量算力。"
+    },
+    {
+      "q": "为什么调参时「一次只改一个变量」是底线纪律？",
+      "options": ["为了省电", "同时改多个变量，曲线变化无法归因，学不到任何结论", "wandb 的技术限制", "GPU 只支持单变量修改"],
+      "answer": 1,
+      "explain": "实验的价值在于归因。同时改 lr 和 batch，效果变好你也不知道是哪个起作用，下一次决策仍然是猜。"
+    },
+    {
+      "q": "124M mini-LLaMA 的有效 batch 量级建议是？",
+      "options": ["几十个 token 就够", "约 0.5M~1M token（如 2048 序列 × 256~512 条）", "必须超过 1B token", "batch 无影响，随意设"],
+      "answer": 1,
+      "explain": "GPT-3 论文的经验：小模型配 0.5M~1M token 的 batch 性价比高；太小则梯度噪声大、曲线震荡，太大则算力浪费在边际收益上。"
+    }
+  ]
+}

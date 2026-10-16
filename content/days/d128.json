@@ -1,0 +1,71 @@
+{
+  "day": 128,
+  "title": "GGUF 格式 + llama.cpp",
+  "sections": [
+    {
+      "h": "直觉：为什么需要另一个格式",
+      "md": "PyTorch 存的 `.pth` 是 Python pickle——要加载它得先起一个 Python 进程、装好整套深度学习环境；CUDA 一条链路吃掉几个 GB。想在 MacBook、树莓派、手机上跑模型，这套依赖不可接受。\n\nGGML/GGUF 一系（llama.cpp 生态）的答案：**用纯 C/C++ 重写推理，把模型存成自描述的单文件**，不依赖 Python 和 GPU。这是「本地跑 LLM」能成为现实的工程基石。"
+    },
+    {
+      "h": "机制：GGUF 文件结构",
+      "md": "GGUF（GPT-Generated Unified Format）是一个**单文件容器**，三段式布局：\n\n```\n[ magic: \"GGUF\" (4字节) | version | tensor_count | kv_count ]\n[ KV 元数据区：key-value 对，连续存放 ]\n[ 张量数据区：对齐后的权重字节 ]\n```\n\nKV 元数据区存**一切非权重信息**，且小端序、内嵌类型标注：\n\n- 模型结构：`llama.block_count`、`llama.context_length`、`llama.embedding_length`\n- 词表：tokenizer 的词表与合并规则直接内嵌（无需外部文件）\n- 量化信息：每个张量的数据类型（Q4_K、Q8_0、F16……）\n- 通用信息：`general.architecture`、`general.name`、chat template\n\n关键设计：**读一个文件就能完整重建推理所需的一切**。新增元数据只需加 KV，不破坏旧读取器——这是从 GGJT 到 GGUF 演进解决的头号痛点（旧格式改结构就要 bump 版本号，生态碎片化）。\n\n> 动手：用 `llama-gguf-parser` 或 python 的 gguf 库 dump 一个小模型的 KV 区，对照字段名猜含义，比读十篇教程都有用。"
+    },
+    {
+      "h": "llama.cpp 的量化档位",
+      "md": "llama.cpp 不用 GPTQ/AWQ 的名字，而是一套自家 k-quants 方案，思想同源（保护重要通道 + 误差补偿）：\n\n| 档位 | 每 weight 比特 | 特点 |\n|---|---|---|\n| Q8_0 | 8.5 | 几乎无损，基准参照 |\n| Q6_K | 6.5 | 接近无损 |\n| Q5_K_M | 5.5 | 质量/体积均衡点 |\n| Q4_K_M | 4.8 | **默认推荐**，性价比最高 |\n| Q3_K_M | 3.9 | 小模型慎用 |\n| Q2_K | 2.6 | 极限压缩，能力明显受损 |\n\n注意 Q4_K_M 实际是 4.8 bit 而非整 4：K-quants 对不同层用不同粒度分组（超块/子块两级 scale），重要层保留更多有效位——正是 AWQ「区分通道重要性」思想的变体。"
+    },
+    {
+      "h": "实战：把自己的模型量化部署",
+      "md": "把实验课训的 mini-LLaMA 从 HF 格式转成 GGUF 并量化：\n\n```bash\n# 1. 转 GGUF（FP16 中间格式）\npython convert_hf_to_gguf.py ./my-minillama --outtype f16 \\\n  --outfile my-mini-f16.gguf\n\n# 2. 量化到 Q4_K_M\n./llama-quantize my-mini-f16.gguf my-mini-q4km.gguf Q4_K_M\n\n# 3. 跑起来（CPU 或 Metal）\n./llama-cli -m my-mini-q4km.gguf -p \"一度电是什么\" -n 200\n```\n\n验证清单：\n\n1. **困惑度对比**：`llama-perplexity` 分别测 F16 与 Q4 版本，PPL 上升应 <5%\n2. **生成抽样**：同 prompt 双版本各生成几次，对比连贯性与重复率\n3. **速度**：记录 tokens/s，确认量化确实换来了加速/省内存\n\n常见坑：chat template 没写进 GGUF 的 KV 区，对话格式全乱——转换脚本不会自动猜模板，需要手动补。\n\n```bash\n# 服务化：起一个本地 OpenAI 兼容 API\n./llama-server -m my-mini-q4km.gguf --port 8080\ncurl localhost:8080/v1/chat/completions -d '{...}'\n```"
+    },
+    {
+      "h": "与 LLM/Agent 的关联",
+      "md": "GGUF + llama.cpp 改变了 LLM 应用的部署选项：\n\n- **隐私场景**：数据不出机器的本地助手（律师、医疗文档）只能靠这条路\n- **Agent 的本地节点**：llama-server 暴露 OpenAI 兼容 API，任何 Agent 框架（Day 131 的 LangChain 等）都能无缝切换到本地模型，把 endpoint 从官方 API 换成 localhost 即可\n- **成本模型**：本地 INT4 推理边际成本为零——高频调用的 Agent 路由层放本地，省钱且低延迟\n\n明天学评估（MMLU/GSM8K）：量化到底掉了多少点，要用标准 benchmark 说话。"
+    }
+  ],
+  "keyPoints": [
+    "GGUF 是自描述单文件容器：文件头 + KV 元数据区（结构/词表/chat template）+ 张量数据区，读取器向后兼容",
+    "llama.cpp 用 C/C++ 去掉 Python/CUDA 依赖，是本地与端侧跑 LLM 的工程基石",
+    "k-quants 档位（Q4_K_M 等）思想同 GPTQ/AWQ：区分层/通道重要性，重要部分保留更高有效位",
+    "量化部署三步：convert_hf_to_gguf.py 转 F16 → llama-quantize 量化 → llama-cli/server 运行",
+    "上线前必须对比 F16 与量化版的 PPL 和生成质量；chat template 要手动写进 GGUF"
+  ],
+  "quiz": [
+    {
+      "q": "GGUF 相比旧的 PyTorch checkpoint 最关键的优势是？",
+      "options": ["文件更小", "单文件自描述：内嵌结构、词表、模板等全部元数据，C/C++ 程序零依赖直接读", "推理速度一定更快", "支持更多编程语言训练"],
+      "answer": 1,
+      "explain": "自描述 + 零 Python 依赖让任意设备读一个文件就能重建推理，这是本地部署的先决条件；文件小是量化的功劳，不是格式本身的。"
+    },
+    {
+      "q": "GGUF 文件里 Tokenizer 词表放在哪？",
+      "options": ["单独的 tokenizer.json 文件", "KV 元数据区", "张量数据区", "不存放，运行时下载"],
+      "answer": 1,
+      "explain": "GGUF 把词表与合并规则作为 KV 对内嵌在元数据区，保证单文件完整——不像 HF 格式拆成多个文件。"
+    },
+    {
+      "q": "Q4_K_M 实际约 4.8 bit 而非精确 4 bit，原因是？",
+      "options": ["量化算法有 bug", "K-quants 用超块/子块两级 scale，不同层粒度不同，还要存 scale 本身的开销", "文件头占用空间", "为了兼容 Q5 格式"],
+      "answer": 1,
+      "explain": "分级分组让重要层保留更多有效位，加上每组 scale/零点的元开销，实际平均位宽高于标称值——这是质量更好的原因。"
+    },
+    {
+      "q": "convert 后本地对话输出格式混乱，最可能的原因是？",
+      "options": ["量化档位太低", "chat template 没写入 GGUF 的 KV 元数据，模型不知道该用什么对话格式", "上下文长度不足", "llama.cpp 版本太新"],
+      "answer": 1,
+      "explain": "转换脚本不猜对话模板；缺 template 时模型按裸补全处理对话，输出自然乱。需在转换或后处理时补上 chat template。"
+    },
+    {
+      "q": "Agent 框架想用 llama.cpp 的本地模型，最顺滑的接入方式是？",
+      "options": ["重写 Agent 框架的内核", "用 llama-server 起 OpenAI 兼容 API，把 endpoint 指向 localhost", "把 GGUF 转回 PyTorch 格式", "必须用 GPU 服务器"],
+      "answer": 1,
+      "explain": "llama-server 暴露 /v1/chat/completions 兼容接口，任何支持 OpenAI API 的框架改个 base_url 就能切换到本地模型。"
+    },
+    {
+      "q": "验证量化质量最标准的做法是？",
+      "options": ["看文件大小是否符合预期", "对比 F16 与量化版的困惑度和生成抽样，PPL 上升应很小", "只测 tokens/s", "问模型自己感觉如何"],
+      "answer": 1,
+      "explain": "llama-perplexity 双版本对比 + 抽样生成检查是最低配置；文件大小只说明压缩成功，不代表质量合格。"
+    }
+  ]
+}

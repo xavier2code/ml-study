@@ -1,0 +1,71 @@
+{
+  "day": 16,
+  "title": "Bagging vs Boosting",
+  "sections": [
+    {
+      "h": "集成学习：为什么要多个模型",
+      "md": "单个模型各有盲区：决策树不稳定、线性模型太死板、KNN 慢。**集成学习（ensembling）**的核心信仰：多个「中等水平但犯错方式不同」的模型组合起来，能超过任何单个模型——前提是它们的错误**不相关**。\n\n直觉：17.2 个随机猜 +-1 的朋友，多数投票比任何单人更接近正确——错误相互抵消。这正是 Condorcet 陪审团定理的机器学习版。\n\n两大范式：\n\n- **Bagging**（Bootstrap AGGregatING）：并行训练一群「强而不同」的模型，平均降**方差**——代表随机森林\n- **Boosting**：串行训练一群「弱而互补」的模型，累加降**偏差**——代表 AdaBoost/GBDT/XGBoost\n\n今天用「偏差-方差」这把尺子（Day 11）把两者解剖清楚。"
+    },
+    {
+      "h": "Bagging：平均掉方差",
+      "md": "**Bootstrap 采样**：从 m 个样本有放回抽 m 个——约 63.2% 的不同样本会被抽到，其余约 36.8% 成为袋外（OOB）样本。每棵树用一份不同的 bootstrap 数据训练，最后投票/平均。\n\n**数学（直觉版）**：k 个方差 σ²、两两相关性 ρ 的模型，等权平均后：\n\n```\nVar = ρσ² + (1-ρ)σ²/k\n```\n\n读法：当 k→∞，第二项消失，方差下限是 ρσ²。**所以 bagging 的成败在压 ρ**——随机森林的「每分裂只看 √n 个特征」正是为此：强迫树走不同的路，做出真正不同的判断。\n\n**性质总结**：\n\n- 基学习器要**低偏差高方差**（不剪枝的深树）——有方差可降\n- 并行训练，天然多核\n- OOB 分数免费送：不用划分验证集，用没被抽到的 36.8% 评估\n- 对噪声稳健，几乎不过拟合（树数越多越稳，不会更差）"
+    },
+    {
+      "h": "Boosting：逐个纠错降偏差",
+      "md": "Boosting 把问题反过来：基学习器用**高偏差低方差**的弱模型（浅树/树桩），串行地把偏差一步步磨掉。\n\n```\nF₀(x) = 常数\nfor t = 1..M:\n    rₜ = y - Fₜ₋₁(x)          # 上一轮的残差\n    hₜ = 弱树拟合 rₜ           # 只学「还差的部分」\n    Fₜ(x) = Fₜ₋₁(x) + η·hₜ(x) # 小步累加\n```\n\n每棵新树面对的是**被重新加权的问题**：AdaBoost 提高错分样本权重（错的题多刷），GBDT 直接拟合负梯度（把错误当新目标）。η 小步长 + 浅树 = 每次只做小幅修正，M 轮累加后偏差大幅下降。\n\n**代价是方差回升**：模型是累加的，后面依赖前面，错误会传播；M 太大就在拟合噪声——所以 GBDT 对超参（M、η、树深）比 RF 敏感得多，需要 early stopping。\n\n| | Bagging (RF) | Boosting (GBDT/XGB) |\n|---|---|---|\n| 基学习器 | 深树（低偏差高方差） | 浅树（高偏差低方差） |\n| 训练 | 并行 | 串行 |\n| 主要降低 | 方差 | 偏差 |\n| 过拟合风险 | 低，加树无害 | 有，需早停/正则 |\n| 调参敏感度 | 低 | 高 |\n| 噪声鲁棒性 | 好 | 较差 |"
+    },
+    {
+      "h": "sklearn 对比实验",
+      "md": "同一个 Titanic 特征集上控制变量对比：\n\n```python\nfrom sklearn.ensemble import (RandomForestClassifier,\n    BaggingClassifier, GradientBoostingClassifier, AdaBoostClassifier)\n\nconfigs = {\n  'Bagging(树桩)':  BaggingClassifier(DecisionTreeClassifier(max_depth=1),\n                                      n_estimators=300, random_state=42),\n  'RF(深树)':       RandomForestClassifier(n_estimators=300, random_state=42),\n  'AdaBoost(树桩)': AdaBoostClassifier(n_estimators=300, learning_rate=0.5,\n                                       random_state=42),\n  'GBDT(浅树)':     GradientBoostingClassifier(n_estimators=300, max_depth=2,\n                                       learning_rate=0.05, random_state=42),\n}\nfor name, m in configs.items():\n    s = cross_val_score(make_pipeline(pre, m), X, y,\n                        cv=StratifiedKFold(5, shuffle=True, random_state=42))\n    print(f'{name}: {s.mean():.4f} ± {s.std():.4f}')\n```\n\n**预期现象与解读**：\n\n- 「Bagging(树桩)」分数垫底——树桩偏差太高，bagging 只降方差救不了偏差\n- 「AdaBoost(树桩)」明显更好——同样的树桩，串行纠错把偏差磨掉\n- RF 与 GBDT 接近且领先，GBDT 略高但折间方差常略大\n- 把 GBDT 的 n_estimators 从 300 拉到 2000 不加早停，CV 分数先升后降——亲眼看到过拟合\n\n这组实验是「bagging 降方差、boosting 降偏差」的活教材。"
+    },
+    {
+      "h": "与 LLM/Agent 的关联 + 今日串联",
+      "md": "- **Bagging ≈ self-consistency**：LLM 多次温度采样生成多条推理链再投票——「并行多个随机版本取平均」，标准 bagging 结构\n- **Boosting ≈ 迭代式对齐**：RLHF/ Constitutional AI 的「生成→批评→修正→再批评」循环，每轮专攻上一轮的不足（残差）；GBDT 的验证集早停 ≈ 对齐训练里盯住 eval 分数早停防止 reward hacking\n- **MoE 专家路由**可看作「结构性集成」：不同专家承担不同子问题，门控做动态加权——bagging 的自适应版\n- **Agent 设计**：多 Agent 辩论（generator vs critic）、自我反思循环（Reflexion）都是 boosting 的组织学移植\n\n今日串联：集成 = 用相关性管理（bagging 压 ρ、boosting 控误差传播）换取超线性性能。至此 Phase 1 的监督学习地图完整：线性模型 → 树 → 集成 → 调参方法论。明天进入无监督世界（PCA/t-SNE），为 embedding 直觉铺路。\n\n动手清单：跑四配置对比实验；GBDT 树数扫描画「先升后降」曲线；用 OOB 分数（`oob_score=True`）对照 5 折 CV。"
+    }
+  ],
+  "keyPoints": [
+    "集成有效的前提：基模型犯错方式不相关；错误相关时平均无收益",
+    "Bagging：bootstrap 采样 + 并行深树 + 平均，方差 ρσ²+(1-ρ)σ²/k，成败在压低相关性 ρ",
+    "Boosting：串行浅树拟合残差/负梯度，η 小步累加降偏差，代价是方差与调参敏感度回升",
+    "RF 加树无害几乎不过拟合；GBDT 树数过多过拟合，必须 early stopping",
+    "Bagging 基学习器要低偏差，Boosting 基学习器要低方差——用反了（如 bagging 树桩）效果差"
+  ],
+  "quiz": [
+    {
+      "q": "集成学习有效的前提条件是？",
+      "options": ["基模型必须都很强", "基模型的错误尽量不相关", "基模型必须同构", "数据量必须大"],
+      "answer": 1,
+      "explain": "错误高度相关时，平均后错误依旧存在（ρ→1 时方差下限 ρσ² 几乎不降）；多样性才是集成的燃料。"
+    },
+    {
+      "q": "Bagging 用树桩（max_depth=1）做基学习器通常效果很差，原因是？",
+      "options": ["树桩训练太慢", "树桩偏差太高，bagging 只能降方差救不了偏差", "树桩无法并行", "树桩对特征太多敏感"],
+      "answer": 1,
+      "explain": "bagging 的数学收益在方差项；树桩本身高偏差，平均一百个同样有偏的模型偏差依旧。boosting（AdaBoost）才能把树桩的偏差磨掉。"
+    },
+    {
+      "q": "k 个相关性 ρ、方差 σ² 的模型等权平均，k→∞ 时方差趋于？",
+      "options": ["0", "σ²", "ρσ²", "σ²/k"],
+      "answer": 2,
+      "explain": "Var = ρσ² + (1-ρ)σ²/k，第二项随 k 消失，下限是 ρσ²——这就是为什么随机森林要靠特征随机压低 ρ。"
+    },
+    {
+      "q": "GBDT 训练中把 learning_rate 从 0.1 改到 0.01，同时可用更多轮数，通常的效应是？",
+      "options": ["更快过拟合", "泛化往往更好但训练更慢（小步慢走）", "完全没影响", "模型变成随机森林"],
+      "answer": 1,
+      "explain": "小步长让每棵树只做温和修正，配合更多轮数和早停，通常得到更平滑的泛化曲线——代价是算力。"
+    },
+    {
+      "q": "随机森林把 n_estimators 从 100 加到 1000，最可能的观察是？",
+      "options": ["测试分数先升后明显下降", "分数趋稳或略升，不会因树多而过拟合", "训练时间不变", "必须重新调 max_depth"],
+      "answer": 1,
+      "explain": "bagging 的平均方差随 k 单调不增；树越多估计越稳。过拟合风险来自单树复杂度而非树的数量——与 boosting 相反。"
+    },
+    {
+      "q": "LLM 的 self-consistency（多条推理链投票）结构上最像今天哪个方法？",
+      "options": ["Boosting 的残差拟合", "Bagging：多个带随机性的独立样本投票/平均", "网格搜索", "PCA 降维"],
+      "answer": 1,
+      "explain": "温度采样提供随机性（类似 bootstrap），多条链独立生成再投票取平均——是 bagging「并行独立 + 聚合」的直接移植。"
+    }
+  ]
+}

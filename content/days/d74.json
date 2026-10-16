@@ -1,0 +1,71 @@
+{
+  "day": 74,
+  "title": "位置编码：Sinusoidal + Learned",
+  "sections": [
+    {
+      "h": "Attention 是个「脸盲」",
+      "md": "把输入 token 顺序打乱，注意力的输出只是跟着同样打乱——它是**置换不变**的：看到的是一个集合，不是序列。但语言的顺序即语义（「狗咬人」与「人咬狗」用词完全相同）。\n\n所以必须把位置信息**显式注入**。原始 Transformer（2017）的方案朴素而优雅：给每个位置造一个位置编码向量 PE(pos)，直接加到词嵌入上，x = token_emb + PE(pos)。两种经典实现——固定的 Sinusoidal 与可学习的 Learned——今天都亲手写一遍。"
+    },
+    {
+      "h": "Sinusoidal 公式推导",
+      "md": "```\nPE(pos, 2i)   = sin( pos / 10000^(2i/d_model) )\nPE(pos, 2i+1) = cos( pos / 10000^(2i/d_model) )\n```\n\n设计巧思有三层：\n\n1. **成对维度 = 二维平面上的角度**：第 (2i, 2i+1) 维可以看成单位圆上一个角度为 pos/10000^(2i/d) 的点，位置推进就是转角推进。\n2. **不同维度不同频率**：低维波长短（2π），相邻位置差异大——细粒度；高维波长长（最长 10000·2π）——粗粒度。整体像**二进制计数器**：低位翻转快，高位翻转慢，组合起来每个位置得到唯一签名。\n3. **相对位置可线性表示**：由三角恒等式 sin(a+b) = sin a·cos b + cos a·sin b（cos 同理），PE(pos+k) 是 PE(pos) 的**线性变换**——为模型学习相对位置关系提供了土壤。"
+    },
+    {
+      "h": "PyTorch 实现两种 PE",
+      "md": "```python\nimport torch, torch.nn as nn, math\n\nclass SinusoidalPE(nn.Module):\n    def __init__(self, d_model, max_len=5000):\n        super().__init__()\n        pe = torch.zeros(max_len, d_model)\n        pos = torch.arange(max_len).unsqueeze(1).float()\n        div = torch.exp(torch.arange(0, d_model, 2).float()\n                        * (-math.log(10000.0) / d_model))\n        pe[:, 0::2] = torch.sin(pos * div)\n        pe[:, 1::2] = torch.cos(pos * div)\n        self.register_buffer('pe', pe)   # 固定常量：随模型保存但不训练\n    def forward(self, x):               # x: (B, T, C)\n        return x + self.pe[: x.size(1)]\n\nclass LearnedPE(nn.Module):\n    def __init__(self, d_model, max_len=512):\n        super().__init__()\n        self.pe = nn.Embedding(max_len, d_model)  # 每个位置一个可学向量\n    def forward(self, x):\n        t = torch.arange(x.size(1), device=x.device)\n        return x + self.pe(t).unsqueeze(0)\n```\n\n实现细节：`div` 预先算好 10000^(-2i/d) 一行的分母；`register_buffer` 保证固定编码不进优化器。对照验证：把 pe 的前几行画出来，应看到低维快振荡、高维慢振荡的条纹图。"
+    },
+    {
+      "h": "对比与取舍",
+      "md": "| | Sinusoidal | Learned |\n|---|---|---|\n| 参数量 | 0 | max_len × d_model |\n| 位置外推 | 理论上任意长度 | 超过训练长度即崩 |\n| 表达能力 | 模式固定 | 更灵活 |\n\n原论文的实验结论是两者效果**差不多**——这本身就说明「有位置信息」比「位置信息长什么样」更重要。\n\n真正的分水岭在**外推**：learned PE 遇到训练时没见过的位置编号时没有嵌入可用，性能骤降；sinusoidal 至少有定义。生产里的选择：GPT-2 用 Learned（max_len = 1024），原始 Transformer 用 Sinusoidal。而现代 LLM 基本都改用 RoPE（明天）——但理解加性 PE 是理解一切后续方案的前提。"
+    },
+    {
+      "h": "与 LLM 的关联：位置决定视野上限",
+      "md": "加性 PE 把位置信号混进残差流，与内容信息纠缠在一起，层与层还会逐步稀释。但它揭示的规律永恒：**位置编码方案决定了模型上下文长度的上限**——learned PE 的 max_len、sinusoidal 的有效频率范围，都是硬边界。\n\n对 Agent 的启示同样直接：上下文窗口不是「想开多大开多大」，而是由训练时的位置方案划定的。d75 的 RoPE、d76 的 ALiBi/YaRN，本质上都是在重新回答「位置怎么给、能给多远」。"
+    }
+  ],
+  "keyPoints": [
+    "注意力置换不变，必须显式注入位置信息；原始方案 x = token_emb + PE(pos)",
+    "Sinusoidal：成对维度看角度，波长从 2π 到 10000·2π，像二进制计数器",
+    "三角恒等式保证 PE(pos+k) 是 PE(pos) 的线性变换，利于学相对位置",
+    "register_buffer 注册固定常量；learned PE 用 nn.Embedding，参数 = max_len×d_model",
+    "learned PE 无法外推到训练长度之外；位置方案划定上下文长度上限"
+  ],
+  "quiz": [
+    {
+      "q": "Attention 为什么必须额外加位置编码？",
+      "options": ["为了提高计算速度", "注意力对输入置换不变、不感知顺序，而语言的顺序承载语义", "为了减少参数量", "为了稳定梯度"],
+      "answer": 1,
+      "explain": "打乱输入顺序输出只是同样打乱；「狗咬人」与「人咬狗」的区别必须由位置信息提供。"
+    },
+    {
+      "q": "Sinusoidal 编码中不同维度维度的核心区别是？",
+      "options": ["数值大小不同", "频率不同：低维波长短（细粒度）、高维波长长（粗粒度），像二进制计数器", "维度越高越重要", "随机生成"],
+      "answer": 1,
+      "explain": "不同维度频率从 2π 到 10000·2π 递变，快慢振荡组合出每个位置的唯一签名。"
+    },
+    {
+      "q": "register_buffer 的作用是？",
+      "options": ["注册一个可训练参数", "注册固定常量张量：随模型保存、随设备迁移，但不进优化器", "加速 GPU 计算", "自动进行梯度裁剪"],
+      "answer": 1,
+      "explain": "sinusoidal 表是预先算好的常量，用 buffer 挂在模块上可避免重复计算且不会被训练。"
+    },
+    {
+      "q": "Learned PE 的致命短板是什么？",
+      "options": ["参数太多必然过拟合", "无法外推到训练最大长度之外的位置（没有对应嵌入）", "不能反向传播", "只对中文有效"],
+      "answer": 1,
+      "explain": "GPT-2 的 max_len=1024 就是硬边界；超出训练长度没有嵌入可用，性能骤降。"
+    },
+    {
+      "q": "「PE(pos+k) 可表示为 PE(pos) 的线性变换」这一性质来自什么？",
+      "options": ["矩阵的秩不变性", "三角恒等式 sin(a+b)=sin a·cos b+cos a·sin b 及其 cos 对应式", "softmax 的平移不变性", "残差连接"],
+      "answer": 1,
+      "explain": "角度平移 k 对应正弦余弦的旋转，写成矩阵乘正是一个线性变换，为学相对位置提供土壤。"
+    },
+    {
+      "q": "GPT-2 使用的是哪种位置编码？",
+      "options": ["Sinusoidal", "Learned Embedding（max_len=1024）", "RoPE", "ALiBi"],
+      "answer": 1,
+      "explain": "GPT-2 用可学习位置嵌入，因此上下文上限被 1024 硬性框住；现代模型已普遍转向 RoPE。"
+    }
+  ]
+}

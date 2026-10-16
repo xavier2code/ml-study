@@ -1,0 +1,101 @@
+{
+  "day": 79,
+  "title": "FFN 深入（GELU / SwiGLU / MoE）",
+  "sections": [
+    {
+      "h": "为什么 FFN 值得单独一天",
+      "md": "Transformer 每层由两块组成：注意力负责**在 token 之间路由信息**，FFN 负责**对每个 token 独立加工与存储知识**。以 GPT-2 small（d=768）为例：注意力参数约 4d²，而 FFN 是 d→4d→d 的两层 MLP，参数约 8d²——**全模型约 2/3 的参数躺在 FFN 里**。把 FFN 看作「每个 token 各自查询的键值存储」，很多设计就顺理成章：激活函数要平滑（GELU）、表达力要强（SwiGLU）、容量要能稀疏扩展（MoE）。今天沿这条演化线走一遍。"
+    },
+    {
+      "h": "从 ReLU 到 GELU：更软的门",
+      "md": "直觉：激活函数决定神经元的输出如何被输入调制。ReLU 直接把负数砍成 0——硬拐点、负区梯度恒为 0，神经元可能「死掉」。我们想要一扇**软门**：输入很小则大概率拦下，输入很大则几乎必然放行。\n\n**GELU**（Gaussian Error Linear Unit）把这个概率显式写出来：\n\n```\nGELU(x) = x · Φ(x)    （Φ 是标准正态分布的 CDF）\n```\n\n读法：输入 x 乘以「它自己通过这扇门的概率」。工程上用 tanh 近似：\n\n```\nGELU(x) ≈ 0.5x · (1 + tanh(√(2/π) · (x + 0.044715x³)))\n```\n\n它处处可导、在负区保留一点小输出且曲率连续（优化面平滑），BERT 与 GPT-2 都用它。"
+    },
+    {
+      "h": "SwiGLU：用门控换表达力",
+      "md": "FFN 的第二个演化是引入**门控**。GLU（Gated Linear Unit）把中间表示劈成两半：一半做内容、一半过激活函数当门：\n\n```\nSwiGLU-FFN(x) = ( SiLU(xW) ⊗ (xV) ) · W₂\nSiLU(x) = x · σ(x)\n```\n\n两路都由输入线性变换而来，相乘实现「自己决定放行多少」。三个矩阵（W、V、W₂）比传统两个（d→4d→d）多一个，为保持参数量不变，中间维从 4d 缩到 **⅔ × 4d = 8d/3**（LLaMA-7B：d=4096，中间维 11008）。\n\n```python\nclass SwiGLUFFN(nn.Module):\n    def __init__(self, d, hidden):\n        super().__init__()\n        self.w  = nn.Linear(d, hidden, bias=False)\n        self.v  = nn.Linear(d, hidden, bias=False)\n        self.w2 = nn.Linear(hidden, d, bias=False)\n    def forward(self, x):\n        return self.w2(F.silu(self.w(x)) * self.v(x))\n```\n\n经验上同等参数量下 SwiGLU 损失更低，LLaMA、Qwen、DeepSeek 等主流开源模型全部采用。"
+    },
+    {
+      "h": "简化版 MoE：参数多、算得少",
+      "md": "FFN 占参数 2/3，能不能**做大但不全算**？MoE：放 N 个并行 FFN（专家），router 给每个 token 打分，只送进 top-k 个（k 通常 1–2），输出按门控权重加权合并。\n\n```python\nclass MoE(nn.Module):\n    def __init__(self, d, n_expert=8, top_k=2):\n        super().__init__()\n        self.experts = nn.ModuleList([SwiGLUFFN(d, d*4) for _ in range(n_expert)])\n        self.router = nn.Linear(d, n_expert, bias=False)\n        self.top_k = top_k\n    def forward(self, x):\n        w, idx = torch.topk(self.router(x), self.top_k, -1)\n        w = torch.softmax(w, dim=-1)\n        out = torch.zeros_like(x)\n        for i in range(self.top_k):\n            for e, expert in enumerate(self.experts):\n                m = (idx[..., i] == e)\n                if m.any():\n                    out[m] += w[..., i:i+1][m] * expert(x[m])\n        return out\n```\n\n**最大的坑是负载不均**：早期 router 会把 token 都引向少数热门专家，其余饿死。解法是辅助损失 L_aux = α·E·Σₑ fₑ·Pₑ（fₑ 为流向专家 e 的 token 比例，Pₑ 为平均路由概率），均衡时 fₑ ≈ Pₑ ≈ 1/E 乘积最小，专家过热则被罚。"
+    },
+    {
+      "h": "今日串联：FFN 演化史",
+      "md": "MoE 已是前沿模型的默认形态：Mixtral 8×7B 用 8 个专家、每 token 激活 2 个——总参数约 47B、活跃参数仅 13B；DeepSeek-V3 进一步用 256 个细粒度路由专家压低训练成本。核心账本：**推理成本由活跃参数决定，模型容量由总参数决定**，稀疏化让两者解耦。\n\n今天的主线：GELU 把硬门变软门 → SwiGLU 用门控换表达力 → MoE 用稀疏路由换容量——「同样的参数，更聪明的结构」。你手写的 SwiGLUFFN 与 MoE 明天就能替换进 nanoGPT 的 Block 里。\n\n明日预告：RMSNorm——LLaMA 系列的另一个标配，砍掉一半归一化参数，训练反而更稳更快。"
+    }
+  ],
+  "keyPoints": [
+    "FFN 占 Transformer 约 2/3 参数（8d² vs 注意力 4d²），是模型的知识存储",
+    "GELU(x) = x·Φ(x)：输入乘以通过概率，处处可导，负区保留小输出",
+    "SwiGLU = SiLU(xW) ⊗ (xV)：三矩阵结构，中间维取 8d/3 并对齐 256 倍数以保持参数量",
+    "MoE 用 router 做 top-k 稀疏激活：总参数定容量，活跃参数定算力",
+    "MoE 必须加负载均衡辅助损失 L = α·E·Σfₑ·Pₑ，否则专家退化"
+  ],
+  "quiz": [
+    {
+      "q": "为什么说 FFN 存了 Transformer 约 2/3 的参数？",
+      "options": [
+        "FFN 有 4 层而注意力只有 2 层",
+        "标准 FFN 是 d→4d→d，参数约 8d²，而多头注意力约 4d²",
+        "FFN 的激活函数参数特别多",
+        "注意力层可以共享参数而 FFN 不能"
+      ],
+      "answer": 1,
+      "explain": "自注意力的 Q/K/V/O 四个矩阵共约 4d²；FFN 两个大矩阵共约 8d²，因此 FFN 占每层参数的 2/3。"
+    },
+    {
+      "q": "GELU 相比 ReLU 的关键改进是？",
+      "options": [
+        "计算更快，只需一次比较",
+        "处处平滑可导，且负区保留小的非零输出",
+        "输出范围被压缩到 (0,1)",
+        "完全去掉了非线性"
+      ],
+      "answer": 1,
+      "explain": "GELU(x)=x·Φ(x) 在 0 点曲率连续、负区不为零硬截断，优化面更平滑；ReLU 在 0 处有尖角且负区梯度为 0。"
+    },
+    {
+      "q": "LLaMA 把 SwiGLU 中间维设为 8d/3（再对齐到 256 倍数）的原因是？",
+      "options": [
+        "8d/3 是数学上最优的宽度",
+        "SwiGLU 有三个矩阵，缩小宽度使参数量与传统 4d 的两层 FFN 相当",
+        "为了和注意力的头数对齐",
+        "为了让激活函数更快"
+      ],
+      "answer": 1,
+      "explain": "传统 FFN 参数 ∝ d·4d·2 = 8d²；SwiGLU 三个矩阵，取 h=8d/3 时 3·d·h = 8d²，参数量与计算量持平。"
+    },
+    {
+      "q": "Mixtral 8×7B 总参数约 47B，但推理时每 token 只激活约 13B，这靠什么实现？",
+      "options": [
+        "模型剪枝掉了 34B 参数",
+        "MoE 路由：每 token 只经过 top-2 个专家 FFN",
+        "使用 2-bit 量化",
+        "推理时只跑一半的层"
+      ],
+      "answer": 1,
+      "explain": "MoE 的 router 为每个 token 选 top-k 专家，注意力与 embedding 共享、FFN 稀疏激活，故容量 47B 而算力按 13B 计。"
+    },
+    {
+      "q": "MoE 的负载均衡辅助损失为什么必要？",
+      "options": [
+        "为了提高单专家的表达能力",
+        "防止 router 把 token 都引向少数专家，其余专家训练不足",
+        "为了降低学习率",
+        "为了让 top-k 变成 top-1"
+      ],
+      "answer": 1,
+      "explain": "早期 router 会坍缩到热门专家，冷专家得不到梯度。均衡损失惩罚专家选择频率与平均路由概率的乘积失衡，迫使负载摊开。"
+    },
+    {
+      "q": "SwiGLU 中两个分支 SiLU(xW) 与 (xV) 逐元素相乘的作用是？",
+      "options": [
+        "把两路输出简单求平均",
+        "一路产生内容、一路充当门控，信息自适应加权",
+        "为了让输出一定是正数",
+        "为了减少矩阵乘法的次数"
+      ],
+      "answer": 1,
+      "explain": "门控机制让网络自己决定每个特征通道放行多少，比单路非线性 FFN 表达力更强，同参数量下损失更低。"
+    }
+  ]
+}

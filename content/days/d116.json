@@ -1,0 +1,67 @@
+{
+  "day": 116,
+  "title": "Continuous Batching",
+  "sections": [
+    {
+      "h": "static batching 的浪费",
+      "md": "最朴素的批处理：凑齐 N 个请求一起 forward，全部生成完再一起返回（HF Transformers 的 generate 默认就是这样）。两个结构性问题：\n\n1. **长度不齐**：序列必须 padding 到同一长度，短序列白白算一堆 pad token\n2. **完成即空转**：序列生成互相独立，有人 50 token 就结束，有人要 500。整批必须等最长者——7 条短序列陪 1 条长序列坐满全程，GPU 大部分时间在为已完成的序列做无用功\n\n设想 batch=8、其中一条特别长：后期 7 个 slot 全在算已完成请求的 padding，**有效利用率可能不到 20%**。加 batch 提吞吐的路，在这里被『等最长者』堵死了。"
+    },
+    {
+      "h": "原理：iteration-level 调度",
+      "md": "Orca（OSDI 2022）提出把调度粒度从『整个请求』降到『每次解码迭代』——这就是 **continuous batching**（in-flight / iteration-level batching）：\n\n- 每步解码后检查：完成的序列**立刻返回**、释放槽位\n- 等待队列里的新请求**立刻补位**，参加下一步迭代\n- batch 的组成每一步都在变，GPU 永远在算『活着的』token\n\n实现细节上有个关键难点：**selective batching**。LayerNorm、MLP 对 batch 维无耦合，可以合并算；但 attention 的 KV 长度各不相同，不能塞进同一个 (B, L) 张量——所以 Orca 只对非 attention 算子做 batch，attention 按序列各自算（vLLM 用 PagedAttention 把不同长度的 KV 统一进 block 池，让这件事更优雅）。\n\n调度上还要处理新请求的 admission：显存不够时排队（这又回到 Day 114 的 KV 显存管理——两者是天作之合）。"
+    },
+    {
+      "h": "对比 static vs continuous 吞吐量",
+      "md": "自己动手验证（这是今天的 2.5h 实验）：\n\n1. 固定 100 个请求，输入/输出长度按真实分布采样（如 lognormal）\n2. A 组：HF `generate` 按 batch 凑批跑完；B 组：vLLM 同负载\n3. 记录总耗时、tok/s、GPU 利用率\n\n预期结果与解释：\n\n- static 组吞吐随 batch 增大先升后**饱和**——『等最长者』让边际收益趋零，padding 占比随长度方差增大而恶化\n- continuous 组消除空转与大部分 padding，吞吐持续上升直到带宽打满；vLLM 论文口径：相对当时 SOTA 系统（本身已支持一定连续性）再提升 2–4×，其中调度与显存管理各占大头\n\n> 思考题：如果所有请求长度完全相同（比如都是恰好 512 token），continuous batching 的优势还剩多少？（答：几乎只剩消除排队等待与 admission 灵活性——气泡的根源正是长度方差。）"
+    },
+    {
+      "h": "进阶：chunked prefill 与抢占",
+      "md": "continuous batching 解决 decode 迭代间的空转，还剩两个洞：\n\n- **长 prefill 阻塞**：一条 100K token 的新请求做 prefill 时，正在 decode 的所有序列都得等它——TPOT 出现尖刺。**chunked prefill** 把长 prompt 切成小块，与 decode 迭代穿插执行，用一点吞吐换延迟平稳\n- **显存耗尽**：KV block 池满了怎么办？**preemption**——逐出部分序列，或把其 KV swap 到 CPU，或干脆丢弃稍后重算（重算的代价通常低于 swap 的换入换出）\n\n到今天为止的三件套可以串起来了：**PagedAttention（显存）+ continuous batching（调度）+ prefix caching（复用）**——vLLM 快的全部秘密，外加底层的高效 attention kernel（Day 120）。TGI、SGLang、TensorRT-LLM 的 inflight batching 都是同一思想的变体。"
+    }
+  ],
+  "keyPoints": [
+    "static batching 两大浪费：长度不齐的 padding + 等最长者导致已完成序列空转",
+    "continuous batching = 调度粒度降到每次解码迭代：完成即退场、新请求即补位",
+    "selective batching：非 attention 算子可 batch，attention 因各序列 KV 长度不同需分别处理",
+    "chunked prefill 削长 prompt 造成的 TPOT 尖刺；显存耗尽时靠 preemption（swap/重算）",
+    "vLLM 快的完整答案 = PagedAttention + continuous batching + prefix caching + 高效 kernel"
+  ],
+  "quiz": [
+    {
+      "q": "static batching 中 batch=8 且其中 1 条序列特别长，会发生什么？",
+      "options": ["整批占住 GPU 直到最长序列完成，其余 7 条完成后空转（算 padding 或闲置）", "短序列先返回并释放槽位", "系统自动把长序列拆给另一个 GPU", "结果错误"],
+      "answer": 0,
+      "explain": "静态批的边界是『全部完成』，长尾序列决定整批耗时，后期大量算力花在已完成请求上——这就是 continuous batching 要消灭的气泡。"
+    },
+    {
+      "q": "continuous batching 的调度粒度是？",
+      "options": ["每次解码迭代（token 级）", "每个请求", "每个 batch", "每层 transformer"],
+      "answer": 0,
+      "explain": "Orca 称之为 iteration-level scheduling：每步迭代后重排 batch，完成退出、新请求进入，而不是等整批结束。"
+    },
+    {
+      "q": "为什么说 attention 算子不能像 LayerNorm 那样随意 batch？",
+      "options": ["各序列的 KV 长度不同，无法塞进统一的 (B, L) 张量，需按序列分别计算", "attention 没有 batch 维", "LayerNorm 是非线性的", "attention 必须用 fp32"],
+      "answer": 0,
+      "explain": "这就是 selective batching 的由来：只合并无长度耦合的算子。PagedAttention 用统一 block 池表示变长 KV，让跨长度 batch 变得可行。"
+    },
+    {
+      "q": "仅有 continuous batching 还不够兑现高吞吐，还需要什么配合？",
+      "options": ["高效的显存管理（如 PagedAttention），否则新请求因 KV 显存不足进不来", "更大的模型", "更长的 prompt", "更多 tokenizer 词表"],
+      "answer": 0,
+      "explain": "调度提供『位置』，显存管理提供『空间』。碎片严重的系统里，即使调度允许补位，新请求也分不到连续 KV 显存——两者缺一不可。"
+    },
+    {
+      "q": "chunked prefill 主要解决什么问题？",
+      "options": ["超长 prompt 的 prefill 独占 GPU 迭代，导致正在 decode 的序列出现延迟尖刺", "权重加载慢", "分词器并发不足", "KV cache 太大"],
+      "answer": 0,
+      "explain": "把长 prefill 切成小块与 decode 穿插，用少量总吞吐换 TPOT 平稳——典型的延迟/吞吐权衡。"
+    },
+    {
+      "q": "若所有请求生成长度完全相同，continuous batching 相对 static 的优势还剩多少？",
+      "options": ["大幅缩水——气泡根源正是长度方差，剩下的主要是排队灵活性与 admission 控制", "完全不变", "反而更慢", "优势翻倍"],
+      "answer": 0,
+      "explain": "长度一致时『等最长者』不再有额外代价，padding 也为零；continuous batching 只剩请求到达时无需凑批的好处。理解边界条件才算真懂机制。"
+    }
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "day": 144,
+  "title": "Function Calling 协议",
+  "sections": [
+    {
+      "h": "直觉：从正则解析到结构化协议",
+      "md": "手写 ReAct 时你已经尝过文本协议的苦：`Action: search[参数]` 多个空格、换个标点就解析失败，全靠宽容的正则和运气。\n\n**Function Calling** 把这件事协议化：你在请求里**声明**工具（名字、参数 schema），模型直接输出**结构化 JSON** 调用，服务商保证格式合法。相当于：\n\n- 以前：你教模型说黑话，再自己翻译\n- 现在：模型说官方语言，SDK 帮你解析成对象\n\n这不是新魔法——它就是 ReAct 的 Action 环节换成了可靠的数据协议。"
+    },
+    {
+      "h": "机制：OpenAI 与 Anthropic 规范对照",
+      "md": "两家规范核心字段几乎同构，记住一张对照表：\n\n| 概念 | OpenAI | Anthropic |\n|---|---|---|\n| 工具声明 | `tools: [{type:\"function\", function:{name, description, parameters}}]` | `tools: [{name, description, input_schema}]` |\n| 强制调用 | `tool_choice: {type:\"function\", function:{name:\"get_weather\"}}` | `tool_choice: {type:\"tool\", name:\"get_weather\"}` |\n| 模型发起调用 | 消息 role=`assistant`，含 `tool_calls` | content 块 type=`tool_use` |\n| 回传结果 | role=`tool` 消息带 `tool_call_id` | role=`user` + type=`tool_result` 块 |\n\n`parameters` 用 JSON Schema 描述：类型、必填、枚举值。**枚举特别有用**——参数只允许 `asc|desc` 时写 `enum`，模型几乎不会填错。\n\n一次完整往返：请求带 tools → 模型返回 tool_calls（此时还没有答案）→ 你执行函数 → 把结果按上表格式回传 → 模型生成最终回答。注意：**执行工具的永远是你的代码**，API 只负责「决定调用并给出参数」。"
+    },
+    {
+      "h": "例子：实现一个自定义 tool 框架",
+      "md": "目标：加新工具只写一个函数 + 装饰器。核心是自动抽取签名生成 schema、统一分发执行：\n\n```python\nTOOLS = {}\n\ndef tool(fn):\n    sig = inspect.signature(fn)\n    params = {\n        name: {\"type\": TYPE_MAP[p.annotation]}\n        for name, p in sig.parameters.items()\n    }\n    TOOLS[fn.__name__] = {\n        \"name\": fn.__name__,\n        \"description\": fn.__doc__,   # docstring 即说明书\n        \"parameters\": {\"type\": \"object\",\n                       \"properties\": params},\n    }\n    return fn\n\n@tool\ndef get_weather(city: str) -> str:\n    \"\"\"查询指定城市的实时天气，返回温度与天气现象\"\"\"\n    return weather_api(city)\n```\n\n调用侧统一处理消息循环：收到 tool_calls → 查表执行 → 结果回传 → 循环直到模型给出普通文本。再补两个实战细节：\n\n1. **参数校验**：模型给的 JSON 仍可能缺字段——用 pydantic 校验，错误信息回传让模型重试\n2. **并行调用**：模型可能一次给多个 tool_calls（如同时查两个城市），要逐个执行后**一起**回传再进入下一轮"
+    },
+    {
+      "h": "与 LLM/Agent 的关联",
+      "md": "Function calling 是 Agent 世界的 USB 接口：昨天 LangGraph 的 researcher 节点、明天 Langfuse 的 trace 记录、MCP（Model Context Protocol）生态里成千上万的工具服务器，都构建在这层协议之上。\n\n训练视角：这就是你 Phase 3 学过的 **SFT 数据格式**（Day 106 的 conversations schema）在生产端的镜像——模型在预训练后见大量「工具调用格式」样本才学会的这项技能。你当初构造的 `role: tool` 消息，正是今天协议里回传结果的那一格。\n\n> 一个常被忽略的事实：**模型选择调用哪个工具，本质是把它在做的下一个-token 预测**——工具名只是词表里被约束到合法 JSON 里的 token。"
+    },
+    {
+      "h": "今日练习",
+      "md": "1. 实现 @tool 装饰器框架，注册三个工具：`search_docs`（接 RAG 服务）、`calculator`、`get_weather`（mock 数据）\n2. 分别用 OpenAI 与 Anthropic 格式跑通同一组问题，体会字段差异\n3. 故意问一个无关问题（「今天心情如何」），验证模型正确地**不调用**任何工具\n\n明日预告：工具调用铺开后，怎么看见 Agent 内部发生了什么——Langfuse 可观测性。"
+    }
+  ],
+  "keyPoints": [
+    "Function calling = ReAct 的 Action 环节升级为结构化 JSON 协议，由服务商保证格式合法",
+    "工具用 JSON Schema 声明；enum 约束取值可大幅降低参数错误率",
+    "执行工具的永远是你的代码；API 只负责决定调用与给参数；并行 tool_calls 要全部执行后一起回传",
+    "tool_choice 可强制指定调用某工具；两家厂商字段对照：tools/tool_use/tool_result 同构",
+    "@tool 装饰器自动生成 schema + 统一分发执行 + pydantic 校验错误回传，是自定义框架骨架"
+  ],
+  "quiz": [
+    {
+      "q": "Function calling 与手写 ReAct 文本协议相比，本质改进是？",
+      "options": ["模型变得更聪明", "工具调用从正则解析文本升级为结构化 JSON 协议，格式由 API 保证", "不再需要循环", "可以离线运行"],
+      "answer": 1,
+      "explain": "模型能力没变，变的是接口可靠性：合法 JSON + tool_call_id 关联，解析层不再靠猜。"
+    },
+    {
+      "q": "API 返回 tool_calls 之后、得到最终回答之前，你的代码必须做什么？",
+      "options": ["直接把 tool_calls 展示给用户", "执行对应函数，并把结果按规定格式回传给 API 再请求一轮", "重新发起全新对话", "修改模型参数"],
+      "answer": 1,
+      "explain": "API 只「决定调用」，执行永远在你的代码里；结果回传后模型才能基于真实数据生成回答。"
+    },
+    {
+      "q": "要让参数只能取 asc/desc 两个值，schema 里最有效的写法是？",
+      "options": ["description 里写「请填 asc 或 desc」", "用 JSON Schema 的 enum 枚举约束", "执行时发现非法值就报错", "无所谓，模型总能填对"],
+      "answer": 1,
+      "explain": "enum 在解码层面约束了合法取值，比自然语言叮嘱和事后报错都可靠——能用结构约束就别用 prose。"
+    },
+    {
+      "q": "模型一次返回了两个 tool_calls（查北京和上海天气），正确处理是？",
+      "options": ["只执行第一个", "逐个执行后把两个结果一起回传，再进入下一轮", "报错，一次只能调一个", "各开一个新对话分别处理"],
+      "answer": 1,
+      "explain": "并行调用是协议支持的正常行为：结果需按各自 tool_call_id 配对、同一轮回传，否则模型收不到另一半结果。"
+    },
+    {
+      "q": "@tool 装饰器框架里，工具的 description 应该来自哪里、写给谁看？",
+      "options": ["写在单独文档里给人看", "来自 docstring，作为 prompt 的一部分写给 LLM 看", "不需要 description", "加密存储"],
+      "answer": 1,
+      "explain": "description 会随 tools 声明进入请求，是模型选工具、填参数的依据——它是写给模型的说明书，质量直接影响调用准确率。"
+    },
+    {
+      "q": "用户问「推荐一部电影」而工具箱里只有天气和计算器，理想行为是？",
+      "options": ["强行调用 get_weather", "不调用任何工具，直接用参数知识回答", "报错退出", "循环调用所有工具找答案"],
+      "answer": 1,
+      "explain": "会用工具也要会不硬用：无关请求应直接回答。练习里专门测这个 case，就是检验工具选择的自控力。"
+    }
+  ]
+}

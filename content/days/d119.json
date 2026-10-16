@@ -1,0 +1,65 @@
+{
+  "day": 119,
+  "title": "Week 17 复盘 + 写推理优化 blog",
+  "sections": [
+    {
+      "h": "Week 17 复盘",
+      "md": "这一周把「模型训好了怎么跑起来」走了一遍，串起来看是一条清晰的因果链：\n\n1. **KV cache**（Day 113）：自回归解码的注意力开销从 O(N²)/步 降到 O(N)/步，代价是显存线性增长\n2. **PagedAttention / vLLM**（Day 114–115）：KV cache 显存碎片与预留浪费是吞吐瓶颈 → 分页管理\n3. **Continuous batching**（Day 116）：static batching 的「木桶效应」→ 请求级动态进出，GPU 不空转\n4. **Speculative decoding**（Day 117）：decode 是访存受限 → draft 模型猜、大模型一次验证多个\n5. **TRT-LLM / llama.cpp**（Day 118）：编译期内核融合 vs 端侧量化，两条部署路线\n\n共同主题：**LLM 推理优化的每一步都是在跟显存和访存带宽作斗争**，而不是跟 FLOPs。"
+    },
+    {
+      "h": "画一张推理优化技术栈图",
+      "md": "把本周技术按「作用层面」分层，每层解决一个不同的瓶颈：\n\n```\n┌─ 算法层：Speculative Decoding（draft+验证，省解码步数）\n├─ 调度层：Continuous Batching（请求级动态进出）\n├─ 显存层：KV cache → PagedAttention（分页，消灭碎片）\n├─ 算子层：FlashAttention（IO 感知 tiling）、内核融合\n├─ 数值层：量化 FP8/INT4（更小的数，更少的字节搬运）\n└─ 硬件层：GPU 架构（HBM 带宽、SRAM、异步拷贝）\n```\n\n画图的收获在于**看清正交性**：数值层量化与显存层分页互不干扰，可与调度层连续批处理任意组合——这就是为什么生产栈能同时用上 Q4 量化 + PagedAttention + continuous batching。每层独立吃自己的收益，加起来就是数量级的提升。"
+    },
+    {
+      "h": "怎么定位自己的瓶颈",
+      "md": "拿到一个慢系统，先测量再优化，按指标对症下药：\n\n- **TTFT（首 token 延迟）高** → prefill 阶段是计算受限：看算子层（FlashAttention）、模型规模、上下文长度\n- **TPOT（每 token 延迟）高** → decode 阶段是访存受限：看量化（减字节数）、speculative（减步数）、batch 并发\n- **吞吐（token/s 总量）低** → GPU 空转：看调度层（continuous batching）、显存层（KV 分页，塞更多并发）\n\n```\n前提认知：decode 阶段 batch=1 时，GPU 算力利用率常常不到 5%\n——因为每生成一个 token 只为读一遍几十 GB 的权重，纯访存往返\n```\n\n这个「decode 是带宽问题，prefill 是算力问题」的二分，是推理优化最重要的一句话。"
+    },
+    {
+      "h": "写 blog：从 KV cache 到 vLLM 的 7 天",
+      "md": "下午的写作任务。骨架建议（讲清「为什么」比罗列「是什么」有价值）：\n\n1. **从一次浪费说起**：朴素养成为什么每步重算全部注意力 → KV cache 的直觉推导\n2. **显存算账**：以 7B 模型为例算 KV cache 字节数，展示显存如何被吃光、碎片化（放你自己的数字）\n3. **vLLM 三件套**：PagedAttention + continuous batching + preemption，类比操作系统虚拟内存讲清 page table\n4. **benchmark 对比**：static vs continuous batching 吞吐曲线（哪怕只测 8 并发）\n5. **更远的地方**：speculative decoding、量化、FlashAttention 各一句话定位\n\n写作要点：每个技术都先写「没有它会怎样」的痛点，再写解法；放一张手画的栈图；结论控制在三句话内。这既是对外分享，也是你面试推理岗的叙事草稿。"
+    },
+    {
+      "h": "今日串联",
+      "md": "本周你完成了从「会训模型」到「会服务模型」的跨越。这个视角转换的价值：以后读任何推理论文（FlashAttention、MoE 推理、Mamba），第一反应都是「它在哪个层面解决什么瓶颈」——算子、显存、调度、算法还是数值。\n\n对 Agent 开发者的直接意义：Agent 的多轮长对话 = 巨大的 KV cache 压力；工具调用循环里的每一次生成都在为 TPOT 买单。懂得推理成本结构，才知道该在哪个环节（缓存上下文、换小模型、缩短 prompt）省钱。\n\n下周预告：FlashAttention 深入——训练加速的核心，也是「IO 感知算法设计」的最佳教材。"
+    }
+  ],
+  "keyPoints": [
+    "推理优化五层栈：算法/调度/显存/算子/数值，层与层正交可叠加",
+    "decode 是访存受限（利用率常 <5%），prefill 是计算受限——对症下药的第一判断",
+    "TTFT 高查 prefill 算力，TPOT 高查访存与量化，吞吐低查调度与 KV 分页",
+    "本周主线：与显存和带宽斗争，而不是与 FLOPs",
+    "blog 写法：先写「没有它会怎样」的痛点，再写解法，配自己测的数字"
+  ],
+  "quiz": [
+    {
+      "q": "decode 阶段 batch=1 时 GPU 利用率常常不到 5%，根本原因是？",
+      "options": ["模型太小", "每步只算一个 token 却要读一遍全部权重，瓶颈在访存带宽而非算力", "CUDA 版本太旧", "注意力算错了"],
+      "answer": 1,
+      "explain": "解码一步的计算量极小，但几十 GB 权重必须从 HBM 搬一遍，时间全花在搬数据上，算力单元在等待。"
+    },
+    {
+      "q": "服务吞吐量（总 token/s）低，按分层诊断思路应优先检查？",
+      "options": ["换更快的 GPU", "调度层（continuous batching）与显存层（KV 分页并发数）", "加大模型", "缩短 tokenizer"],
+      "answer": 1,
+      "explain": "吞吐低的本质是 GPU 空转或并发上不去：static batching 木桶效应、KV 显存碎片都属这两层。"
+    },
+    {
+      "q": "「五层技术栈」里量化与 PagedAttention 的关系是？",
+      "options": ["互相冲突只能二选一", "属于不同层（数值层 vs 显存层），正交可叠加使用", "量化包含 PagedAttention", "都是调度层技术"],
+      "answer": 1,
+      "explain": "量化减数值字节，分页管显存组织，解决的是不同瓶颈，所以生产栈能同时开启两者。"
+    },
+    {
+      "q": "TTFT 明显偏高，最该排查的方向是？",
+      "options": ["prefill 阶段：上下文长度、模型规模、算子效率（如 FlashAttention）", "提高 batch size", "减少输出长度", "换 tokenizer"],
+      "answer": 0,
+      "explain": "首 token 延迟由 prefill 决定——一次性并行处理整段 prompt，属于计算受限，长 prompt 或慢算子直接拉高 TTFT。"
+    },
+    {
+      "q": "写推理优化 blog 时，最有说服力的写法是？",
+      "options": ["堆砌论文引用", "每个技术先写「没有它会怎样」的痛点，再配自己实测的数字", "多放架构图少写字", "按时间线罗列工具"],
+      "answer": 1,
+      "explain": "先讲痛点和动机再讲解法，读者才理解技术存在的必要性；自测数字（哪怕小规模）比转述论文可信。"
+    }
+  ]
+}

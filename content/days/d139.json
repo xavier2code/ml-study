@@ -1,0 +1,65 @@
+{
+  "day": 139,
+  "title": "RAG 评估 (RAGAS / TruLens)",
+  "sections": [
+    {
+      "h": "RAG 评估为什么难",
+      "md": "三个原因叠加：**开放式问题没有唯一正确答案**（\"退货政策是什么\"有十种正确说法，精确匹配必挂）；**失败分两层**——检索层没找到（contexts 里根本没有答案）与生成层没用好（找到了却答错/乱编），两层用药完全不同；**线上没有 ground truth**——真实用户的问题没有标注答案。\n\n所以第一原则：**先分层定位，再看总分**。一个笼统的\"答案质量分\"无法告诉你该修检索还是修 prompt。RAGAS 的指标体系正是沿检索/生成两层切开的。"
+    },
+    {
+      "h": "RAGAS 指标体系",
+      "md": "四个核心指标，沿管线切开（无需 ground truth 的三个打 ★）：\n\n| 指标 | 测什么 | 层 |\n|---|---|---|\n| ★ faithfulness | 答案拆成 claim 后，被 contexts 支持的比例 | 生成 |\n| ★ answer relevancy | 答案与问题的相关度（答非所问检测） | 生成 |\n| ★ context precision | 检索回的 chunk 里，相关的排得有多靠前 | 检索 |\n| context recall | ground truth 答案的每个要点能否在 contexts 找到出处 | 检索 |\n\n诊断矩阵（平台排障手册的直接素材）：\n\n| 症状 | 定位 |\n|---|---|\n| context recall 低 | 检索漏了 → 修召回（混合检索/HyDE/rerank） |\n| context precision 低 | 检索回来了但全是噪声 → 修排序与阈值过滤 |\n| faithfulness 低、precision 正常 | 上下文是对的，模型在乱编 → 修 prompt 接地约束/换模型 |\n| answer relevancy 低 | 检索正确但答非所问 → 修指令、query 理解 |\n\n前三个指标无参考答案即可计算，这让它们能廉价地跑在**线上抽样流量**上，而不只是标注集。"
+    },
+    {
+      "h": "LLM-as-judge 的机制与坑",
+      "md": "RAGAS 的实现是 prompt 工程：以 faithfulness 为例，judge 模型先把答案**分解成原子 claim**（\"退货需 7 天内申请\"\"运费自担\"），再对每条 claim 判断\"contexts 是否蕴含\"，支持数/总数即得分。context precision 则让 judge 逐条判断每个 chunk 是否相关再按排名加权。\n\n```python\nfrom ragas import evaluate\nfrom ragas.metrics import (faithfulness, answer_relevancy,\n                           context_precision, context_recall)\nfrom datasets import Dataset\n\nds = Dataset.from_dict({\n    \"question\": [\"退货政策是什么\"],\n    \"answer\": [rag_answer],\n    \"contexts\": [[c.page_content for c in retrieved]],\n    \"ground_truth\": [\"7 天内可申请退货，运费自理\"],   # recall 需要\n})\nprint(evaluate(ds, metrics=[faithfulness, answer_relevancy,\n                            context_precision, context_recall]))\n```\n\n坑清单：judge 模型要**比被测系统强**（用 gpt-4o 级当裁判，别拿被测模型自评）；judge 有已知偏置——偏爱长答案、位置偏置、自我偏好；上生产前用**人工标注 20~30 条对齐校准** judge 的准确率（judge 与人的一致率 <80% 时指标不可信）。"
+    },
+    {
+      "h": "评估自己的 RAG 系统",
+      "md": "四步搭自己的评估闭环：\n\n1. **建金标准问题集**：50–100 条，从真实日志与文档里来，刻意覆盖类型——单跳事实、多跳组合、表格数字、**拒答类**（本来就没答案的问题，测系统敢不敢说不知道，这类最能暴露幻觉）\n2. **跑批记录**：每条问题存下 retrieved contexts + 最终答案\n3. **算分层指标**：RAGAS 四件套 + 拒答正确率\n4. **回归基线表**：每次改动（换 embedding、加 rerank、改 chunk 策略、调 prompt）重跑全量，表格记录前后指标——没有这张表，一切\"感觉变好了\"都是玄学\n\n```text\nconfig                 ctx_recall  ctx_prec  faith  ans_rel  拒答对\nv1 dense-only            0.71       0.62     0.88    0.90    0.55\nv2 +bm25 混合+RRF         0.83       0.64     0.89    0.91    0.58\nv3 +bge-rerank+阈值       0.84       0.81     0.90    0.92    0.73\n```\n\n这张表就是明天 FastAPI 服务上线前的\"体检报告\"，也是未来所有 A/B 的基线。"
+    },
+    {
+      "h": "TruLens 与闭环",
+      "md": "TruLens 的 RAG Triad 把诊断收敛成三角：**context relevance**（检索质量）→ **groundedness**（答案是否有据）→ **answer relevance**（是否切题）——思路与 RAGAS 同构，但更偏**应用内嵌**：反馈函数挂在每次查询上记录进 TruLens 的存储，适合线上持续观测。\n\n两者定位：RAGAS 适合**离线批量回归**（改配置前后的全量对比），TruLens 适合**线上流式反馈**（每条查询的实时三角打分）。终极闭环是两者联动：线上低分/差评的 trace 自动沉淀进离线评估集，评估集驱动下周的优化迭代——**没有评估的 RAG 优化是随机游走，有评估的才是爬山**。"
+    }
+  ],
+  "keyPoints": [
+    "RAG 评估第一原则：先分层定位（检索层 vs 生成层）再看总分，两层用药完全不同",
+    "RAGAS 四指标：faithfulness（答案有据）、answer relevancy（切题）、context precision（排序质量）、context recall（召回覆盖，唯一需要 ground truth）",
+    "前三个指标无需参考答案，可廉价跑在线上抽样流量；诊断矩阵直接映射修复动作",
+    "LLM-as-judge 要用强模型、警惕长答案/位置偏置，上线前用 20–30 条人工标注校准一致率",
+    "问题集要含拒答类问题（测敢说不知道）；每次改动跑回归基线表——没有基线的优化是玄学"
+  ],
+  "quiz": [
+    {
+      "q": "评估发现 context precision 很低但 faithfulness 很高，最可能的结论是？",
+      "options": ["模型在编造答案", "检索回来的 chunk 大量无关（噪声多），但模型守住了只依据相关部分作答——应修检索的排序与过滤", "评估脚本坏了", "应该换更小的模型"],
+      "answer": 1,
+      "explain": "faithfulness 高说明答案确实有据（来自上下文），precision 低说明上下文里混入大量无关 chunk。模型在替检索层\"擦屁股\"——但这不可持续：噪声会挤占上下文窗口并增加误导风险，应修检索（rerank、阈值过滤）。"
+    },
+    {
+      "q": "RAGAS 四个核心指标中，哪一个必须提供 ground truth 答案才能计算？",
+      "options": ["faithfulness", "answer relevancy", "context recall", "context precision"],
+      "answer": 2,
+      "explain": "context recall 要检查\"标准答案的每个要点能否在检索结果中找到出处\"，必须有 ground truth 答案作参照。其余三个（faithfulness / answer relevancy / context precision）只需 question+answer+contexts 即可，适合无标注的线上流量抽样。"
+    },
+    {
+      "q": "评估集里专门放\"知识库里本来就没有答案的问题\"，主要为了测什么？",
+      "options": ["检索速度", "系统的拒答能力（敢说不知道而不幻觉）——faithfulness 在这类问题上最见真章", "embedding 维度选择", "向量库的并发能力"],
+      "answer": 1,
+      "explain": "企业场景最伤信任的不是答不出，而是**一本正经编造**。无答案问题（\"我们公司在火星的办事处电话\"）专测接地约束是否生效：正确行为是拒答，幻觉行为是编一个。拒答正确率应进基线表。"
+    },
+    {
+      "q": "用 LLM-as-judge 跑 RAGAS，以下哪种做法是对的？",
+      "options": ["用与被测系统相同的模型当裁判省钱", "judge 用比被测系统更强的模型，并先用 20–30 条人工标注校准 judge 与人的一致率", "judge 温度调到 1 增加多样性", "只看总分不看分项"],
+      "answer": 1,
+      "explain": "裁判能力低于或等于被测系统时判分不可信（弱模型判不了强输出）；judge 有长答案偏好、位置偏置等系统性偏差，需人工标注小样本校准（一致率低于 80% 说明指标不可信）。温度应调低保证判分稳定。"
+    },
+    {
+      "q": "\"每次改完配置凭感觉说说效果好像变好了\"——相对正确的工程做法是？",
+      "options": ["多上线几个版本让用户投票", "固定金标准问题集，每次改动全量重跑分层指标，维护回归基线表对比前后数值", "看线上 QPS 变化", "相信最强模型的直觉"],
+      "answer": 1,
+      "explain": "没有基线表的优化是随机游走。固定问题集消除了题目差异，分层指标告诉你改动作用在哪一层（加 rerank 应抬 context precision，若没抬说明集成有问题），基线表让每一步都可归因、可回滚。"
+    }
+  ]
+}

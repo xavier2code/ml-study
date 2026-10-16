@@ -1,0 +1,65 @@
+{
+  "day": 43,
+  "title": "数据加载 + DataLoader",
+  "sections": [
+    {
+      "h": "喂不饱 GPU 的训练都是浪费",
+      "md": "PyTorch 工程化的第一课：**模型再好，数据管道卡顿，GPU 就在空转**。GPU 算一个 batch 只要几毫秒，而读图、解码、增强串行做的话 I/O 时间是计算的几倍。DataLoader 让「取数据」和「算模型」重叠起来。\n\n先立框架：PyTorch 数据侧就两个角色——\n\n- **Dataset**：回答「第 i 条数据是什么」（单条样本逻辑）\n- **DataLoader**：回答「怎么成批、乱序、并行地取」（调度逻辑）\n\n你只写前者，后者直接用。"
+    },
+    {
+      "h": "Dataset / DataLoader 原理",
+      "md": "**Dataset** 是一个实现 `__len__` 和 `__getitem__` 的类——协议即接口：\n\n```python\nclass MyDataset(torch.utils.data.Dataset):\n    def __len__(self): return self.n\n    def __getitem__(self, i):\n        # 读图/解码/增强/转张量，返回 (x, y)\n```\n\n**DataLoader** 把它包装成迭代器，每次吐一个 batch：\n\n```python\nloader = DataLoader(ds, batch_size=64, shuffle=True,\n                     num_workers=4, pin_memory=True, drop_last=True)\nfor x, y in loader: ...      # x: (64,3,32,32)\n```\n\n内部机制三件套：\n\n1. **Sampler**：决定取哪些下标（shuffle=True 即随机采样，每个 epoch 重洗）\n2. **collate_fn**：把单样本堆叠成 batch 张量（默认可拼 tensor/numpy/list）\n3. **worker 进程**：num_workers=4 即 4 个子进程**并行**执行 `__getitem__`，主进程只管收 batch\n\n> epoch 边界：每轮结束 loader 重洗下标、重新 fork worker。"
+    },
+    {
+      "h": "实战：CIFAR-10 自定义 Dataset",
+      "md": "不用 torchvision 的现成类，从原始图片文件夹手写一个，理解每层发生了什么：\n\n```python\nimport torchvision.transforms as T\ntf_train = T.Compose([\n    T.RandomCrop(32, padding=4),   # 数据增强只在训练集\n    T.RandomHorizontalFlip(),\n    T.ToTensor(),                  # [0,255]→[0,1]，HWC→CHW\n    T.Normalize((0.4914,0.4822,0.4465), (0.247,0.243,0.261)),\n])\n\nclass CIFAR10Folder(Dataset):\n    def __init__(self, root, tf):\n        self.paths = sorted(glob(f'{root}/*/*.png'))\n        self.labels = [CLASSES.index(p.split('/')[-2]) for p in self.paths]\n        self.tf = tf\n    def __len__(self): return len(self.paths)\n    def __getitem__(self, i):\n        img = Image.open(self.paths[i]).convert('RGB')\n        return self.tf(img), self.labels[i]\n```\n\n三个易错点：\n\n- **Normalize 用训练集统计量**，测试集也用同一组数（不是它自己的）\n- **增强只放训练**：测试集要确定性（crop/flip 会让评估不可复现）\n- `__getitem__` 里别做重活（如遍历全目录），它一秒被调用上千次"
+    },
+    {
+      "h": "性能调优：让 GPU 吃饱",
+      "md": "调优旋钮按收益排序：\n\n| 手段 | 作用 |\n|---|---|\n| num_workers=4~8 | 多进程并行读图解码，CPU 侧吞吐翻倍 |\n| pin_memory=True | 锁页内存→GPU 传输走 DMA，异步更快 |\n| persistent_workers=True | epoch 间不销毁重建 worker，省启动开销 |\n| prefetch_factor | 每个 worker 预取几个 batch，削峰 |\n\n自测：训练时盯 `nvidia-smi`——GPU 利用率长期 <70%，瓶颈多半在数据侧，加 worker。\n\n> 常见坑：Jupyter 下 num_workers>0 偶发卡死，把 Dataset 类放 .py 文件再 import 即可。"
+    },
+    {
+      "h": "今日串联 + LLM 关联",
+      "md": "模型代码只占训练工程的 10%，**数据管道决定训练跑得快不快、对不对**。Dataset 定义单条 → Sampler 定序 → collate 成批，三层抽象是各框架通用设计。\n\n**LLM 关联**：\n\n- LLM 的 Dataset 换成了**文本 token 流**：`__getitem__` 返回一段固定长度的 token id 序列，label 就是序列右移一位（next-token prediction）\n- 主流方案把数据**预 tokenize 成二进制 + memory-map**：nanoGPT 用 np.memmap，`__getitem__` 退化为纯切片，I/O 几乎归零——数千亿 token 的吞吐直接换算成训练天数\n- 采样策略本身是研究问题：课程学习、按难度加权、去重——「喂什么」比「怎么喂」更影响模型\n\n明天讲混合精度：同样的 GPU，吞吐翻倍。"
+    }
+  ],
+  "keyPoints": [
+    "Dataset 只写 __len__/__getitem__（单条逻辑），批处理/乱序/并行全交给 DataLoader",
+    "DataLoader 三件套：Sampler 定序、collate_fn 拼批、worker 进程并行执行 __getitem__",
+    "数据增强只放训练集；测试集必须确定性，Normalize 用训练集统计量",
+    "性能旋钮：num_workers 多进程读图、pin_memory 加速 H2D、persistent_workers 省 epoch 启动",
+    "LLM 数据管道常预 tokenize + memory-map：__getitem__ 退化为纯切片，I/O 归零"
+  ],
+  "quiz": [
+    {
+      "q": "自定义 Dataset 必须实现哪两个方法？",
+      "options": ["train() 和 eval()", "__len__ 和 __getitem__", "load() 和 save()", "shuffle() 和 batch()"],
+      "answer": 1,
+      "explain": "PyTorch 用协议约定：有 __len__（多长）和 __getitem__（第 i 条是什么），DataLoader 就能接管成批、乱序、并行。"
+    },
+    {
+      "q": "num_workers=4 的含义是？",
+      "options": ["用 4 个 GPU", "4 个子进程并行执行 __getitem__ 取样本", "batch_size 变成 4 倍", "每个 epoch 只取 1/4 数据"],
+      "answer": 1,
+      "explain": "worker 是 CPU 子进程，预先把样本读好/解码/增强并拼成 batch，主进程拿到就能上 GPU——让取数与计算重叠。"
+    },
+    {
+      "q": "测试集的 Normalize 应该用哪组均值/标准差？",
+      "options": ["测试集自己的统计量", "训练集的统计量（与训练时完全一致）", "全部 0.5", "每次随机生成"],
+      "answer": 1,
+      "explain": "模型是在「训练集统计量归一化」的输入分布上训练的，推理输入必须经过同一变换，否则分布错位、精度崩掉。"
+    },
+    {
+      "q": "训练时 GPU 利用率长期只有 40%，最优先尝试的做法是？",
+      "options": ["增大学习率", "提高 num_workers 并开 pin_memory", "换更大的模型", "减少 epoch"],
+      "answer": 1,
+      "explain": "GPU 空转通常是数据侧瓶颈：磁盘读图和解码太慢喂不上。多 worker 并行读取 + 锁页内存传输是第一优先解法。"
+    },
+    {
+      "q": "nanoGPT 把数据预处理成 np.memmap 二进制文件，主要好处是？",
+      "options": ["文件更小", "__getitem__ 退化为内存切片，免磁盘解码，I/O 近乎归零", "自动去重", "支持增量训练"],
+      "answer": 1,
+      "explain": "token 序列预 tokenize 后是纯整数数组，memory-map 后按索引切片即可，绕开「读图+解码」这类重 I/O，是 LLM 数据管道标准做法。"
+    }
+  ]
+}

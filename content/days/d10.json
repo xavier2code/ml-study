@@ -1,0 +1,71 @@
+{
+  "day": 10,
+  "title": "分类 + 逻辑回归 (Week 3)",
+  "sections": [
+    {
+      "h": "从回归到分类：为什么不能直接用线性回归",
+      "md": "预测房价输出连续值，这是**回归**；预测乘客是否生还（0/1），这是**分类**。直觉做法：用线性回归拟合，输出 >0.5 判为 1。问题在于：\n\n- 线性输出是无界的：一个极端样本会把决策边界拖歪\n- MSE 对分类不是合适的损失：离群样本产生巨大梯度，模型被带偏\n- 我们真正想要的是**概率**：P(y=1|x) ∈ [0,1]\n\n解决思路分两步：先用线性函数打分 z = w·x + b，再把分数压进 (0,1)。这个压缩函数就是 sigmoid。"
+    },
+    {
+      "h": "sigmoid 与逻辑回归模型",
+      "md": "**sigmoid 函数**：\n\n```\nσ(z) = 1 / (1 + e⁻ᶻ)\n```\n\n性质：输出 (0,1)；z=0 时输出 0.5；单调递增；σ(-z) = 1 - σ(z)。逻辑回归的模型就是：\n\n```\nP(y=1|x) = σ(w·x + b)\n```\n\n注意名字里的「回归」是历史遗留——它本质是分类器。决策边界是 w·x + b = 0 这条直线（或超平面），因为 σ(0)=0.5。\n\n### 损失函数：交叉熵\n\n对单个样本，定义：\n\n```\nL(y, ŷ) = -[y·log(ŷ) + (1-y)·log(1-ŷ)]\n```\n\n直觉：若 y=1 而 ŷ=0.01，损失 = -log(0.01) ≈ 4.6，惩罚巨大且随错误程度急剧增长；若 ŷ 接近 1，损失趋近 0。对比 MSE：交叉熵在错得离谱时梯度也很大，学得快；MSE 在 sigmoid 输出层梯度会饱和变小，学得慢。\n\n**与 Day 1 的连接**：这正是交叉熵 H(P,Q) 在「真实分布 P 是 one-hot」时的特例——你在信息论里见过它了。"
+    },
+    {
+      "h": "numpy 手写逻辑回归",
+      "md": "梯度公式出奇简洁（推导略，记住结论）：\n\n```\n∂L/∂w = Xᵀ(ŷ - y) / m\n∂L/∂b = Σ(ŷ - y) / m\n```\n\n完整实现：\n\n```python\nimport numpy as np\n\nclass LogisticRegression:\n    def __init__(self, lr=0.1, epochs=1000):\n        self.lr, self.epochs = lr, epochs\n\n    def sigmoid(self, z):\n        return 1 / (1 + np.exp(-np.clip(z, -500, 500)))\n\n    def fit(self, X, y):\n        m, n = X.shape\n        self.w = np.zeros(n); self.b = 0.0\n        for _ in range(self.epochs):\n            y_hat = self.sigmoid(X @ self.w + self.b)\n            grad_w = X.T @ (y_hat - y) / m\n            grad_b = (y_hat - y).mean()\n            self.w -= self.lr * grad_w\n            self.b -= self.lr * grad_b\n\n    def predict_proba(self, X):\n        return self.sigmoid(X @ self.w + self.b)\n```\n\n> 注意 `np.clip`：z 太大时 e⁻ᶻ 会数值溢出。这类细节是手写实现才遇到的。\n\n验证方法：与 sklearn 的 `LogisticRegression` 对比准确率，应基本一致。"
+    },
+    {
+      "h": "多分类：softmax 是 sigmoid 的推广",
+      "md": "sigmoid 只能输出一个概率，多分类需要 K 个类别各一个概率且和为 1。**softmax**：\n\n```\nsoftmax(z)ₖ = eᶻᵏ / Σⱼ eᶻʲ\n```\n\nsigmoid 就是 K=2 时 softmax 的退化形式。配套损失是 Categorical Cross-Entropy：L = -log(ŷ_true)。\n\n训练时的小技巧：logits 先减去最大值再取指数（数值稳定），深度学习框架里通常直接用 `log_softmax` 或 `cross_entropy` 融合算子。\n\n### 与 LLM 的关联\n\nGPT 的最后一层就是一个巨大的 softmax：词表 5 万个类别，每个 token 位置都在做「下一个词是什么」的多分类。损失函数与你今天手写的完全同源——只是规模从 2 类变成了 5 万类。分类器思维是理解语言模型的钥匙。"
+    },
+    {
+      "h": "今日串联",
+      "md": "**逻辑回归 = 线性打分 + sigmoid 压缩 + 交叉熵损失**。它是最简单的神经网络——把 sigmoid 换成其他激活、叠多层，就是 Day 20+ 的内容。决策边界仍是线性的，明天你会看到如何用正则化控制它的复杂度，后天起决策树彻底摆脱线性限制。\n\n动手清单：在 Titanic 子集上跑通手写版，对比 sklearn；画一条 ROC 曲线直观感受分类器的权衡。"
+    }
+  ],
+  "keyPoints": [
+    "线性回归不能直接做分类：输出无界、MSE 惩罚不当、缺少概率语义",
+    "sigmoid: σ(z)=1/(1+e⁻ᶻ)，把线性分数压进 (0,1)，决策边界是 w·x+b=0",
+    "交叉熵损失 L = -[y·log ŷ + (1-y)·log(1-ŷ)]，错误时梯度大、学习快",
+    "逻辑回归梯度：∂L/∂w = Xᵀ(ŷ-y)/m，形式与线性回归一致",
+    "softmax 是多分类版 sigmoid，GPT 最后一层就是词表规模的 softmax 分类"
+  ],
+  "quiz": [
+    {
+      "q": "为什么不用线性回归 + 阈值 0.5 来做二分类？",
+      "options": ["完全可以，效果一样好", "线性输出无界，极端样本会拖歪决策边界", "线性回归不能输出小数", "因为线性回归没有损失函数"],
+      "answer": 1,
+      "explain": "线性输出无界且 MSE 对分类不敏感度合适，一个离群样本可以把整体预测推离 [0,1]，导致决策边界严重偏移。"
+    },
+    {
+      "q": "sigmoid(0) 的值是多少，它对应什么含义？",
+      "options": ["1，代表正类", "0，代表负类", "0.5，正好在决策边界上", "取决于训练数据"],
+      "answer": 2,
+      "explain": "σ(0) = 1/(1+1) = 0.5。线性得分 z=0 恰是决策边界，说明 w·x+b=0 就是逻辑回归的决策边界。"
+    },
+    {
+      "q": "真实标签 y=1，模型预测 ŷ=0.01，交叉熵损失约为？",
+      "options": ["约 0.01，很小", "约 0.5", "约 4.6，惩罚巨大", "为 0，因为预测值有效"],
+      "answer": 2,
+      "explain": "L = -log(0.01) ≈ 4.6。交叉熵对「自信地错」惩罚急剧增长，这正是它优于 MSE 之处。"
+    },
+    {
+      "q": "手写逻辑回归时 `np.clip(z, -500, 500)` 的作用是？",
+      "options": ["提高准确率", "防止 e⁻ᶻ 数值溢出", "加快矩阵乘法", "归一化特征"],
+      "answer": 1,
+      "explain": "z 很负时 e⁻ᶻ 天文数字级膨胀导致溢出为 inf/nan。clip 后 sigmoid 在 |z|>35 已经饱和，截断不影响结果。"
+    },
+    {
+      "q": "softmax 与 sigmoid 的关系是？",
+      "options": ["两者毫无关系", "K=2 时 softmax 退化为 sigmoid", "softmax 是 sigmoid 的倒数", "sigmoid 是 softmax 的归一化版本"],
+      "answer": 1,
+      "explain": "二类 softmax 的两个输出比值等价于 sigmoid 输出与补的比值；softmax 是多类别概率化的推广形式。"
+    },
+    {
+      "q": "GPT 预测下一个 token 时，输出层的结构和损失是？",
+      "options": ["线性层 + MSE", "sigmoid + 二分类交叉熵", "词表规模的 softmax + 交叉熵", "不需要损失函数"],
+      "answer": 2,
+      "explain": "语言模型每步在 5 万+ 词表上做多分类，用 categorical cross-entropy 训练——与今天手写的逻辑回归同源。"
+    }
+  ]
+}

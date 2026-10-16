@@ -1,0 +1,71 @@
+{
+  "day": 129,
+  "title": "模型评估：MMLU / GSM8K / HumanEval",
+  "sections": [
+    {
+      "h": "直觉：为什么必须有 benchmark",
+      "md": "「感觉模型变强了」不是证据。你训了 3 版 mini-LLaMA、做了 SFT、又量化到 INT4——每一刀下去模型到底是变好还是变坏，只有**可复现的数字**能回答。benchmark 的本质是把「模型能力」操作化为：固定题库 + 固定打分规则 + 固定推理设置（few-shot 数、温度 0），让任何人在任何机器上得到可比较的结果。\n\n没有评测的调优等于蒙眼开枪——这正是 Day 128 说的「量化后必须重跑评测」的具体工具课。"
+    },
+    {
+      "h": "三大经典 benchmark",
+      "md": "### MMLU：知识广度\n5.7 万道四选一选择题，覆盖 57 个学科（数学、法律、医学、历史……）。测的是**世界知识与推理的广度**。随机基线 25%，GPT-4 级约 86%。四选一让打分完全自动化，代价是可能被选项间的统计线索「骗分」。\n\n### GSM8K：小学数学推理\n8.5K 道小学应用题，要求给出最终数值答案。**测多步推理**：每题要 2–8 步算术链条，一步错全盘错。用 few-shot + 「Let's think step by step」风格CoT 提示能显著提分——同一模型不同 prompt 设置分数差 10 个点以上，所以**报告分数必须写清设置**。\n\n### HumanEval：代码生成\n164 道 Python 函数补全题，每题附单元测试，用 **pass@k** 打分：\n\n```\npass@1 = 采样 1 次至少一次通过的比例（最常报）\npass@10 = 采样 10 次至少一次通过的比例\n```\n\npass@k 用执行结果打分，无法靠话术骗分，是最「硬」的评测之一。\n\n| benchmark | 形式 | 打分方式 | 测什么 |\n|---|---|---|---|\n| MMLU | 四选一 | 对数几率/选项概率 | 知识广度 |\n| GSM8K | 数值答案 | 精确匹配 | 多步推理 |\n| HumanEval | 代码+测试 | pass@k 执行通过 | 代码生成 |"
+    },
+    {
+      "h": "机制：lm-evaluation-harness 使用",
+      "md": "EleutherAI 的 lm-evaluation-harness 是事实标准，几十个 benchmark 统一接口：\n\n```bash\npip install lm-eval\n\n# 评估 HF 格式模型（loglikelihood 类任务用 loglikelihood 或 generate）\nlm_eval --model hf \\\n  --model_args pretrained=./my-minillama,dtype=bfloat16 \\\n  --tasks mmlu,gsm8k \\\n  --num_fewshot 5 \\\n  --batch_size 8 \\\n  --output_path results/my-mini/\n\n# 评估本地 GGUF（走 llama.cpp 后端）\nlm_eval --model gguf \\\n  --model_args pretrained=my-mini-q4km.gguf \\\n  --tasks mmlu\n```\n\n关键概念：\n\n- **loglikelihood vs generate**：选择题类任务（MMLU）比较各选项的序列对数几率，不真正生成——快且稳定；生成类（GSM8K 要 CoT、HumanEval 要写代码）必须采样生成——慢且受采样参数影响\n- **num_fewshot** 是头号变量：同一模型 0-shot 与 5-shot 的 MMLU 可能差 5 个点，对比必须同设置\n- **output_path** 存 JSON 结果，进版本管理，形成「每次改动 → 一行分数」的实验日志"
+    },
+    {
+      "h": "实战：评估自己的 mini-LLaMA",
+      "md": "给自己定一个**实验矩阵**，每行跑一遍并记录：\n\n| 实验 | 目的 |\n|---|---|\n| 基座 vs SFT 后 | SFT 带来多少提升？哪项掉分了？ |\n| SFT vs DPO 后 | 对齐是否换来了能力（GSM8K/HumanEval）提升 |\n| FP16 vs INT4 量化 | 量化各 benchmark 掉几个点 |\n\n判读要点：\n\n1. **小模型的 MMLU 可能只比随机高一点**——训练 token 量不够知识没装进去，这是正常且重要的诊断信号，不是 bug\n2. 分数低时先查**格式**：mini 模型常在 few-shot 模板对齐上翻车（答案格式没学会），换个 answer key 排版可能差 10 个点\n3. 对比永远在**同设置**下进行：同 num_fewshot、同 dtype、同 prompt 模板\n\n> 把结果画成一张对比表贴进实验日志——这张表就是你 Phase 4 的「成绩单」，Day 133 验收直接复用。"
+    },
+    {
+      "h": "与 LLM/Agent 的关联",
+      "md": "评测决定了每个工程决策的合法性：\n\n- **benchmark 污染**：训练数据混入评测题，分数虚高——用去污染语料或换私测题验证\n- **Agent 视角**：MMLU/GSM8K 是单轮能力，Agent 还需要工具使用、多轮规划类评测（如 SWE-bench、AgentBench）——但方法论相同：固定任务 + 自动打分\n- **量化部署**（昨天）与今天的闭环：量化 → lm-eval 重测 → 掉点超标就升 bit 数或换 AWQ/GPTQ 方案\n\n明天转向安全：一个 benchmark 分数再高的模型，被一句 prompt 就越狱，也不能上线。"
+    }
+  ],
+  "keyPoints": [
+    "benchmark = 固定题库 + 固定打分 + 固定推理设置，让结果可复现可比较，是所有调优决策的证据来源",
+    "MMLU 测知识广度（四选一）、GSM8K 测多步推理（数值匹配）、HumanEval 测代码（pass@k 执行验证）",
+    "loglikelihood 类任务快而稳，generate 类任务慢且受采样参数影响，报告必须写清 num_fewshot 等设置",
+    "实验矩阵思维：基座/SFT/DPO/量化逐对对比，同设置下只看差值",
+    "小模型分数低先查格式对齐与污染，再下「能力不足」的结论"
+  ],
+  "quiz": [
+    {
+      "q": "为什么说 GSM8K 的分数必须写清 few-shot 与 CoT 设置？",
+      "options": ["为了显得专业", "同一模型不同 prompt 设置分数可差 10 个点以上，不同设置的分数不可比", "harness 强制要求", "因为分数会随日期变化"],
+      "answer": 1,
+      "explain": "CoT 提示能显著提升多步推理得分，设置不同则数字失去可比性——benchmark 的价值全在「控制变量」。"
+    },
+    {
+      "q": "HumanEval 的 pass@1 与 pass@10 的区别是？",
+      "options": ["pass@1 采样 1 次通过的比例，pass@10 采样 10 次至少一次通过的比例，后者≥前者", "pass@10 是 pass@1 的 10 倍", "两者相同", "pass@1 更宽松"],
+      "answer": 0,
+      "explain": "pass@k 随 k 单调不减：多次采样提供了「至少做对一次」的额外机会，因此 pass@10 ≥ pass@1。"
+    },
+    {
+      "q": "lm-evaluation-harness 里 MMLU 这类选择题任务为什么不用真正生成答案？",
+      "options": ["生成功能未实现", "用各选项的 loglikelihood 比较，更快更稳定且不受采样随机性影响", "模型不会生成", "选择题不需要模型"],
+      "answer": 1,
+      "explain": "loglikelihood 评估是确定性的、逐选项可分解的，避免了生成采样引入的方差——这是选择题评测的标准做法。"
+    },
+    {
+      "q": "mini-LLaMA 在 MMLU 上只比随机基线（25%）高一点，最合理的判断是？",
+      "options": ["代码有 bug 需要重训", "训练 token 量太小知识没装进去，先检查格式对齐与数据规模再下结论", "harness 版本错了", "四选一不适合小模型"],
+      "answer": 1,
+      "explain": "MMLU 靠世界知识，小语料训出的模型本来就拿不到分；但应先排除 few-shot 格式没对齐的情况（可能白丢 10 个点）。"
+    },
+    {
+      "q": "「量化后掉点超标就升 bit 数或换量化方案」体现了什么工作流？",
+      "options": ["训练驱动开发", "评测驱动：每次改动量化→benchmark 重测→数据决定去留的闭环", "感觉驱动", "文档驱动"],
+      "answer": 1,
+      "explain": "评测是决策的裁判：改动 → 测量 → 比较 → 取舍，量化、SFT、DPO 的每个工程决策都应有 benchmark 数字背书。"
+    },
+    {
+      "q": "benchmark 污染（contamination）指什么？",
+      "options": ["评测时环境温度过高", "训练数据混入了评测题，导致分数虚高、不再反映真实能力", "答案选项被随机打乱", "GPU 显存不足"],
+      "answer": 1,
+      "explain": "见过原题的模型是在「背」不是在「会」，需用去污染语料或私有测试集来校验真实水平。"
+    }
+  ]
+}

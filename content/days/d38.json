@@ -1,0 +1,102 @@
+{
+  "day": 38,
+  "title": "numpy 手写反向传播（下）+ PyTorch 验证",
+  "sections": [
+    {
+      "h": "Momentum：给梯度装上惯性",
+      "md": "SGD 每步完全相信当前 batch 的梯度，像醉酒下山的人——在峡谷（一个方向陡、另一个方向缓的地形）里来回震荡。**Momentum** 的修正是维护一个速度向量，让历史梯度指数累积：\n\n```\nv ← μ·v − lr·g\nW ← W + v\n```\n\n直觉：一致的方向（峡谷长轴）逐渐加速，来回震荡的方向（短轴）正负抵消。μ=0.9 意味着**等效记忆约 1/(1−μ) = 10 步**的梯度；μ=0 退化为 SGD。\n\n```python\nclass Momentum:\n    def __init__(self, params, lr=0.1, momentum=0.9):\n        self.params, self.lr, self.mu = params, lr, momentum\n        self.v = [np.zeros_like(p) for p in params]\n\n    def step(self, grads):\n        for p, v, g in zip(self.params, self.v, grads):\n            v *= self.mu\n            v -= self.lr * g\n            p += v\n```\n\n参数顺序一个小坑：先 `v *= mu` 再 `v -= lr·g`，这样一步之内梯度不会先被 μ 缩一遍。"
+    },
+    {
+      "h": "训练循环：螺旋数据集",
+      "md": "三分类螺旋是经典的“线性模型必死”数据集，用来验证整个训练链路：\n\n```python\ndef make_spiral(n=100, classes=3, noise=0.1, seed=0):\n    rng = np.random.default_rng(seed)\n    X = np.zeros((n * classes, 2)); y = np.zeros(n * classes, dtype=int)\n    for c in range(classes):\n        r = np.linspace(0.05, 1.0, n)\n        t = np.linspace(c * 4, c * 4 + 3.5, n) + rng.normal(0, noise, n)\n        X[c*n:(c+1)*n] = np.c_[r * np.sin(t), r * np.cos(t)]\n        y[c*n:(c+1)*n] = c\n    return X, y\n\nX, y = make_spiral()\nnet = TwoLayerMLP(2, 64, 3)\nparams = [net.W1, net.b1, net.W2, net.b2]\nopt = Momentum(params, lr=0.5, momentum=0.9)\n\nfor step in range(1000):\n    p, cache = net.forward(X)\n    grads = net.backward(y, cache)\n    opt.step([grads[\"W1\"], grads[\"b1\"], grads[\"W2\"], grads[\"b2\"]])\n    if step % 200 == 0:\n        acc = (p.argmax(1) == y).mean()\n        print(step, net.loss(p, y).round(4), acc.round(3))\n```\n\n预期：loss 从 ≈1.10 一路降到 0.1 以下，准确率接近 100%。**没有框架、没有自动求导，这个网络学会了分类**——你亲手驱动了反向传播。"
+    },
+    {
+      "h": "用 PyTorch 对拍：误差 < 1e-6",
+      "md": "“我觉得我写对了”不是证据。造一个结构相同的 torch 模型，把 numpy 权重拷进去，让 autograd 算同样的梯度：\n\n```python\nimport torch, torch.nn.functional as F\n\ntmodel = torch.nn.Sequential(\n    torch.nn.Linear(2, 64), torch.nn.ReLU(),\n    torch.nn.Linear(64, 3),\n)\nwith torch.no_grad():\n    # 注意：torch 的 Linear 权重形状是！\n    tmodel[0].weight.copy_(torch.tensor(net.W1.T))\n    tmodel[0].bias.copy_(torch.tensor(net.b1))\n    tmodel[2].weight.copy_(torch.tensor(net.W2.T))\n    tmodel[2].bias.copy_(torch.tensor(net.b2))\n\nXt = torch.tensor(X, dtype=torch.float32)\nyt = torch.tensor(y)\nloss = F.cross_entropy(tmodel(Xt), yt)\nloss.backward()\n\np, cache = net.forward(X)\ngrads = net.backward(y, cache)\nprint(np.abs(grads[\"W1\"] - tmodel[0].weight.grad.numpy().T).max())\nprint(np.abs(grads[\"W2\"] - tmodel[2].weight.grad.numpy().T).max())\n# 输出量级 ~1e-8，远小于 1e-6\n```\n\n两个关键点：**权重要转置**（torch.Linear 存 (out, in)，我们存 (in, out)）；对拍要在**同一组权重、同一个 batch** 上一次前向后立刻比较，别先训练再比。"
+    },
+    {
+      "h": "为什么阈值是 1e-6",
+      "md": "两个独立实现算的是同一个数学量，但浮点运算顺序不同（求和顺序、 fused 操作），结果必然有微小差异。经验值：\n\n- **< 1e-6**：公式正确，差异纯属浮点噪声（float32 下通常在 1e-7 上下）\n- **1e-4 ~ 1e-2**：大概率有 subtle bug——比如忘了除 N、用错缓存\n- **> 0.1 或形状都对不上**：转置用错方向、层接错了\n\n这个“对拍方法论”比结论本身更值钱：以后你写的任何自定义算子、任何论文复现、任何“我重写了 attention”，都可以用同一招验证。LLM 工程里常见“用 HF 实现对拍自己写的 attention，逐位置 max diff < 1e-5”——同一件事。"
+    },
+    {
+      "h": "常见 bug 清单",
+      "md": "两天手写下来，最容易踩的坑按出现频率排序：\n\n| Bug | 症状 | 抓它的办法 |\n|---|---|---|\n| 忘了除以 N | 换 batch size 后同样的 lr 表现剧变 | 数值梯度（数值版 loss 里已含 mean） |\n| dW 转置方向错 | 形状报错；H=C 时静默出错 | 非方阵测试 + 形状断言 |\n| softmax 前没减 max | 训练偶发 NaN | 用大 logits（如 ×1000）做单元测试 |\n| gradcheck 在 float32 下做 | 相对误差 1e-3 且查不出原因 | 强制 float64 |\n| 缓存被下一次 forward 覆盖后才调 backward | 梯度随机错 | API 设计上返回 cache，强制立即使用 |\n| momentum 先加 g 再乘 μ | 收敛明显变慢 | 单步数值追踪 v 的演化 |\n\n> 把这张表抄进你的 blog（第 42 天要写的）。踩过并修好的 bug，比任何教程都记得牢。"
+    }
+  ],
+  "keyPoints": [
+    "Momentum：v ← μ·v − lr·g；W ← W + v。μ=0.9 ≈ 记忆最近 10 步梯度，峡谷方向加速、震荡方向抵消",
+    "对拍方法：同一权重 + 同一 batch，一次前向后立即比较梯度；torch.Linear 权重形状是，拷贝时要转置",
+    "梯度一致性阈值：< 1e-6 视为浮点噪声；1e-4 量级提示 subtle bug；形状错误直接判死",
+    "数值梯度检查必须 float64 + 中心差分；float32 的噪声会淹没 1e-6 量级的差异",
+    "三分类螺旋 + 2×64 MLP + momentum(lr=0.5, μ=0.9)：1000 步内 loss 1.10 → <0.1，准确率接近 100%",
+    "对拍是通用验证方法论：自定义算子、论文复现、重写 attention 都适用"
+  ],
+  "quiz": [
+    {
+      "q": "Momentum 中 μ=0.9，速度向量 v 大约等效于累积了多少步的历史梯度？",
+      "options": [
+        "约 2 步",
+        "约 10 步（1/(1−μ)）",
+        "约 90 步",
+        "无穷多步"
+      ],
+      "answer": 1,
+      "explain": "旧梯度的权重每步乘 0.9，衰减到可忽略约需 1/(1−0.9)=10 步。μ=0.99 对应约 100 步记忆。"
+    },
+    {
+      "q": "把 numpy 权重拷进 torch.nn.Linear 时为什么必须转置？",
+      "options": [
+        "为了数值稳定",
+        "torch.Linear 的 weight 形状是，与我们的 (in, out) 相反",
+        "为了利用 GPU",
+        "不需要转置，直接 copy 即可"
+      ],
+      "answer": 1,
+      "explain": "torch.Linear 计算 x @ weightᵀ + bias，权重按 (out_features, in_features) 存储。不转置的话，形状不匹配会直接报错；方阵场景会静默地用错权重。"
+    },
+    {
+      "q": "对拍结果显示 numpy 与 PyTorch 梯度的 max|diff| = 3e-7，正确的解读是？",
+      "options": [
+        "两边都错了，应该完全相等",
+        "公式正确，差异来自浮点运算顺序，符合预期",
+        "说明必须重写",
+        "说明学习率太大"
+      ],
+      "answer": 1,
+      "explain": "同一数学量、不同求和顺序，float32 下 1e-7 量级的差异是正常噪声。对拍要的是量级判断：< 1e-6 通过；1e-4 以上才需要排查。"
+    },
+    {
+      "q": "你的模型换了一个 batch size 后，原本调好的学习率突然发散。最可疑的 bug 是？",
+      "options": [
+        "忘了除以 N：loss 没对 batch 取平均，梯度随 batch size 缩放",
+        "ReLU 写错",
+        "初始化方差不对",
+        "缓存太多占内存"
+      ],
+      "answer": 0,
+      "explain": "如果 loss 是 sum 而不是 mean，batch 越大梯度越大，等效学习率就越大——发散。把 loss 改成 .mean()（梯度里带 1/N）后，batch size 变化时 lr 大体可迁移。"
+    },
+    {
+      "q": "以下哪个场景用数值梯度检查会失真？",
+      "options": [
+        "在 float64 下检查一个 Linear 层",
+        "模型里开着随机 dropout 就去对拍",
+        "用 eps=1e-5 做中心差分",
+        "检查 bias 的梯度"
+      ],
+      "answer": 1,
+      "explain": "数值梯度要求“同一权重算两次 loss”——dropout、随机增强等随机性会让两次前向都不一样，梯度完全失真。检查前先固定随机种子或关掉随机层。"
+    },
+    {
+      "q": "手写 Momentum 的 `step` 里写成先 `v -= lr*g` 再 `v *= mu`，会导致什么？",
+      "options": [
+        "等价于学习率乘了 0.9，收敛稍慢但方向正确性不受影响",
+        "梯度方向错误，完全无法收敛",
+        "代码直接报错",
+        "没有影响，乘法可交换"
+      ],
+      "answer": 0,
+      "explain": "顺序变成 μ·(v − lr·g)，本次梯度被额外乘了一次 μ=0.9，等效学习率打了九折。收敛会变慢，但通常仍能收敛——这正是它阴险的地方：不报错，只是悄悄变差。"
+    }
+  ]
+}

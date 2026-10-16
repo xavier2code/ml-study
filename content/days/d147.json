@@ -1,0 +1,65 @@
+{
+  "day": 147,
+  "title": "Week 21 复盘 + Agent 项目整合",
+  "sections": [
+    {
+      "h": "复盘：Agent 六天拼图",
+      "md": "Week 21 收官，六块拼图现在拼成完整系统：\n\n| Day | 组件 | 在系统里的角色 |\n|---|---|---|\n| 141 | ReAct + Reflexion | 执行器的内核循环 + 失败重试 |\n| 142 | Plan-and-Execute | 复杂问题的任务分解层 |\n| 143 | LangGraph | 编排骨架：supervisor 调度 3-agent |\n| 144 | Function Calling | 工具调用的标准协议 |\n| 145 | Langfuse | 全链路 trace，调试与成本账本 |\n| 146 | Eval suite | 回归防线，改动的分数裁判 |\n\n加上 Week 20 的 RAG 服务（researcher 的工具），你的 demo 系统 = **编排好的多 Agent + 可观测 + 可评估**——这三件套正是生产 Agent 与玩具脚本的分界线。\n\n> 自检：指着架构图，从用户提问到回答经过几个节点、几次 LLM 调用？答不出就回去看 trace。"
+    },
+    {
+      "h": "部署：让 demo 跑起来",
+      "md": "把 LangGraph 应用部署成 demo 服务，最小可用清单：\n\n```text\nagent-demo/\n├── api.py          # FastAPI：POST /ask 流式返回\n├── graph.py        # 3-agent 状态机（Day 143）\n├── tools.py        # function calling 注册（Day 144）\n├── static/         # 一个极简聊天页面\n└── docker-compose.yml  # app + langfuse 两个服务\n```\n\n四个部署要点：\n\n1. **流式输出**（SSE）：Agent 一步 5 秒，不流式用户会以为死机——至少把「正在规划/检索中/撰写中」的状态实时推给前端\n2. **会话隔离**：state 按 session_id 存，多人同时 demo 互不串台；LangGraph checkpoint 天然支持\n3. **降级**：LLM/API 超时要有兜底文案与重试，demo 现场断网是常态\n4. **密钥走环境变量**，绝不进仓库——你自部署的 Langfuse 地址与 key 同理"
+    },
+    {
+      "h": "录 demo：5 分钟讲什么",
+      "md": "录屏不是功能巡礼，是**讲故事**。推荐脚本（5 分钟三段式）：\n\n1. **痛点开场（30s）**：「问它一个需要查私有文档、多步推理的问题，单靠 RAG/单靠 chatbot 都做不到」\n2. **主线演示（3 分钟）**：一个问题贯穿全程，边跑边讲：看，planner 拆成三步 → researcher 正在调 RAG 服务（贴出 Langfuse trace 面板，指认每个 span）→ writer 成稿 → reviewer 打回一次又怎么修复——**把一次真实的失败-修复留在片子里**，比全程丝滑可信十倍\n3. **数据收尾（90s）**：贴 eval suite 基线：成功率、平均步数、P95 延迟、token 成本；最后一句 roadmap：多模态输入、MCP 工具生态\n\n> 口诀：**一条主线问题、一次真实翻车修复、一组硬指标**。观众记住的是这三样，不是 UI 动画。"
+    },
+    {
+      "h": "与 LLM/Agent 的关联",
+      "md": "到这里 Phase 5 的 Agent 基建全部打通，且每一层都能和你前四个 Phase 对上：\n\n- 部署服务 = Day 140 FastAPI 经验直接复用\n- trace/eval = WandB + 评估集思想的 Agent 版\n- researcher 的 RAG = Phase 5 第一阶段的成果\n- writer/reviewer 的底座模型 = 你 Phase 3/4 从零训过、微调过的那一套\n\n下周继续向上：Agent 的记忆系统、MCP 工具生态、多 Agent 进阶与自动化工作流——都建立在「编排 + 可观测 + 可评估」这三件今天定型的地基上。"
+    },
+    {
+      "h": "今日收尾清单",
+      "md": "1. 部署 demo 到本机或一台小服务器，手机访问跑通\n2. 录 5 分钟视频，按三段式脚本剪好，随 README 附 eval 基线截图\n3. 项目 README 更新：架构图、快速启动、已知限制（诚实列出）\n4. 把 Week 21 的 eval 基线存档——这是下周所有改动的对照原点\n\n恭喜：你已经拥有一个**可演示、可观测、可回归**的多 Agent 系统。"
+    }
+  ],
+  "keyPoints": [
+    "三件套分界线：编排+ 可观测+ 可评估 = 生产 Agent，缺一即玩具",
+    "demo 部署四要点：SSE 流式反馈进度、session_id 会话隔离、超时降级兜底、密钥走环境变量",
+    "5 分钟 demo 三段式：痛点开场 → 一条主线问题贯穿（保留一次真实失败-修复）→ 硬指标收尾",
+    "留一次真实翻车与修复在视频里，比全程丝滑更可信",
+    "eval 基线存档是后续一切改动（记忆系统、MCP、工作流）的对照原点"
+  ],
+  "quiz": [
+    {
+      "q": "「生产 Agent 与玩具脚本的分界线」三件套是？",
+      "options": ["大模型 + 长 prompt + 好前端", "编排+ 可观测+ 可评估", "微调 + RAG + 量化", "GPU + 缓存 + 限流"],
+      "answer": 1,
+      "explain": "LangGraph 管控制流、Langfuse 管看见、eval suite 管改坏没坏——三者齐备才敢持续迭代。"
+    },
+    {
+      "q": "Agent 一步要几秒，demo 体验最关键的工程决策是？",
+      "options": ["把所有步骤并行", "流式（SSE）实时推送「规划/检索/撰写」进度，避免用户以为死机", "砍掉工具调用", "加 loading 动画就够了"],
+      "answer": 1,
+      "explain": "长任务的可感知进度比实际速度更重要；SSE 推阶段状态是 Agent 前端的标准做法。"
+    },
+    {
+      "q": "多人同时访问 demo，state 处理的正确做法是？",
+      "options": ["全局共享一份 state", "按 session_id 隔离存储（LangGraph checkpoint 支持），互不串台", "每次请求新建系统", "加锁排队"],
+      "answer": 1,
+      "explain": "共享 state 会让 A 的问题混进 B 的上下文；按会话隔离的 checkpoint 既是并发正确性也是回放调试的基础。"
+    },
+    {
+      "q": "5 分钟 demo 视频里最加分的内容是？",
+      "options": ["UI 动画特效", "一条主线问题贯穿、包含一次真实失败与修复过程、以 eval 指标收尾", "全程快进展示 20 个功能", "念 PPT 介绍架构"],
+      "answer": 1,
+      "explain": "讲故事 + 展示鲁棒性 + 数据背书：一次真实的 reviewer 打回与修复证明系统真的在工作，指标证明它稳定。"
+    },
+    {
+      "q": "为什么要把 Week 21 的 eval 基线存档？",
+      "options": ["留作纪念", "它是后续所有改动（记忆、MCP、工作流）的对照原点，防倒退", "为了向用户展示", "评测跑一次就够"],
+      "answer": 1,
+      "explain": "没有基线就无从判断下周改动是改进还是倒退——回归防线的前提是有一个被冻结的参照分数。"
+    }
+  ]
+}

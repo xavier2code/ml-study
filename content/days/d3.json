@@ -1,0 +1,71 @@
+{
+  "day": 3,
+  "title": "优化基础 + pandas 入门",
+  "sections": [
+    {
+      "h": "为什么机器学习 = 优化问题",
+      "md": "从今天起视角切换：**训练模型就是在参数空间里找一个点，让损失最小**。损失函数是地形，参数是位置，优化器是下山策略。整个 Phase 1 你都在画这条下降曲线。\n\n直觉先行：想象蒙着眼睛在山上找谷底。你能感知的只有**脚下的坡度（梯度）**，于是策略是「朝下坡方向迈一小步」。所有梯度下降法都是这个朴素想法的变体，区别只在：\n\n- 步子多大（学习率）\n- 用全部数据还是一小批算坡度（SGD vs 全量）\n- 要不要记住之前的动量、自适应调步长（Momentum、Adam）\n\n今天看李宏毅《机器学习》第 1–2 讲建立直觉，再学 pandas 为 Phase 1 的数据处理做准备。"
+    },
+    {
+      "h": "SGD：小批量下山的艺术",
+      "md": "**梯度下降（GD）** 每步用全部数据算梯度；**随机梯度下降（SGD）** 每次只用一个（或一小批）样本。公式：\n\n```\nθ ← θ − η · ∇L(θ)\n```\n\nη 是学习率，∇L 是损失对参数的梯度。全量 GD 方向准但慢（一个 epoch 只更新一次），SGD 方向带噪声但更新频繁，而且噪声本身有好处：**像抖动一样帮助跳出尖锐的局部极小和鞍点**，倾向收敛到平坦极小值——后者往往泛化更好。\n\n```python\n# 手写 SGD 一步\nfor xb, yb in dataloader:          # xb: (batch, features)\n    grad = compute_grad(xb, yb, w)\n    w = w - lr * grad              # 就这一行，是深度学习的发动机\n```\n\n深度学习里说的 SGD 几乎都指 mini-batch SGD（batch 32~1024）。batch 越大方向越稳、越能吃满 GPU；越小噪声越大、正则效果越强——这是一对真实存在的取舍。"
+    },
+    {
+      "h": "Momentum 与 Adam：给下山装上重力和自适应",
+      "md": "裸 SGD 在峡谷地形会来回震荡（垂直谷壁方向梯度大、沿谷方向梯度小）。两个经典改进：\n\n**Momentum**：把历史梯度指数加权平均，当惯性——震荡方向的历史贡献正负抵消，一致方向累加提速：\n\n```\nv ← β·v + ∇L(θ)    θ ← θ − η·v\n```\n\nβ≈0.9 意味着记住最近约 10 步的坡度。像重球滚下山，遇到小坑能冲过去。\n\n**Adam**：为每个参数自适应调步长——梯度长期大的参数走小步，长期小的走大步。维护一阶矩 m̂（平滑梯度）和二阶矩 v̂（平滑梯度平方），更新量 ∝ m̂/(√v̂+ε)：\n\n```\nθ ← θ − η · m̂ / (√v̂ + ε)\n```\n\n| 优化器 | 一句话 | 默认首选？ |\n|---|---|---|\n| SGD | 按当前梯度走 | 调好后上限高 |\n| Momentum-SGD | 梯度加惯性 | CNN 时代主力 |\n| Adam | 逐参数自适应步长 | 默认起步选择 |\n\n> 实践经验：拿到新模型先用 Adam（lr=1e-3 量级）跑通，再考虑换 SGD+Momentum 调参冲更好结果。LLM 时代的主力 AdamW 是 Adam 加解耦权重衰减，Phase 3 会亲手配。"
+    },
+    {
+      "h": "pandas：DataFrame 是 ML 的表格母语",
+      "md": "真实数据 90% 的时间是表格，pandas 的 **DataFrame** 就是带标签的二维表（每一列有名字、有类型）。掌握三板斧：\n\n```python\nimport pandas as pd\ndf = pd.read_csv('train.csv')       # 读入\ndf.head()                            # 看前 5 行\ndf.info(); df.describe()             # 结构 + 统计概览\ndf['price']                          # 取一列 → Series\ndf[df['price'] > 100]                # 布尔过滤（行筛选）\ndf['log_p'] = df['price'].apply(np.log)  # 派生新列\n```\n\n**groupby**：分组聚合，SQL 的 GROUP BY：\n\n```python\ndf.groupby('city')['price'].mean()            # 每城市均价\ndf.groupby('city').agg({'price': 'mean', 'id': 'count'})\n```\n\n**merge**：按键拼表，SQL 的 JOIN：\n\n```python\npd.merge(orders, users, on='user_id', how='left')\n```\n\n`how` 决定行为：left/right/inner/outer。链式调用 `.query().groupby().agg()` 能表达大部分特征工程。"
+    },
+    {
+      "h": "今日串联与明日预告",
+      "md": "上午的优化直觉和下午的 pandas 看似无关，实际是 Phase 1 的两块地基：**pandas 把原始数据整形成特征矩阵 X 和标签 y，优化器在 X 上最小化损失**。Kaggle Learn 的练习务必动手——pandas 的肌肉记忆只能靠敲出来。\n\n自检三个问题：\n\n1. 为什么 mini-batch 的噪声反而可能帮助泛化？\n2. Momentum 是怎么在峡谷地形消除震荡的？\n3. `merge` 的 `how='left'` 和 `how='inner'` 结果差在哪？\n\n> 明天是数学周最重要的一天：凸优化直觉 + 亲手用 numpy 实现 softmax 与 cross-entropy。你会发现「为什么 cross-entropy 长那样」的答案藏在 MLE 里。"
+    }
+  ],
+  "keyPoints": [
+    "训练 = 在参数空间沿负梯度方向迭代：θ ← θ − η·∇L(θ)，η 是学习率",
+    "mini-batch SGD 的噪声有正则作用，倾向平坦极小值，泛化更好",
+    "Momentum 用指数加权历史梯度当惯性，峡谷地形震荡抵消、一致方向加速",
+    "Adam 维护一阶/二阶矩，逐参数自适应步长，是现代默认起步优化器（LLM 用 AdamW）",
+    "pandas 三板斧：布尔过滤取行、groupby 分组聚合、merge 按键拼表（how 控制连接方式）"
+  ],
+  "quiz": [
+    {
+      "q": "mini-batch SGD 相比全量梯度下降，其梯度噪声带来的潜在好处是？",
+      "options": ["计算更精确", "帮助跳出尖锐极小/鞍点，倾向平坦极小值，泛化更好", "学习率可以设为无穷大", "完全消除局部极小"],
+      "answer": 1,
+      "explain": "噪声像抖动，让参数有机会逃出尖锐盆地；平坦极小值对数据扰动不敏感，测试误差通常更低。"
+    },
+    {
+      "q": "Momentum（β=0.9）能缓解峡谷震荡的原因是？",
+      "options": ["它把学习率自动调小", "震荡方向的历史梯度正负抵消，一致方向的贡献累加", "它只沿一个坐标轴更新", "它用二阶导数曲率修正方向"],
+      "answer": 1,
+      "explain": "指数加权平均下，来回翻转的梯度分量相互抵消，稳定方向的分量累积放大——净效果是沿谷底平滑前进。"
+    },
+    {
+      "q": "关于 Adam，下列说法正确的是？",
+      "options": ["它对每个参数用相同的学习率尺度", "它用梯度平方的滑动平均给每个参数自适应步长", "它不需要学习率超参数", "它等价于 Momentum"],
+      "answer": 1,
+      "explain": "二阶矩 v̂ 追踪各参数梯度量级，更新量 ∝ m̂/√v̂：梯度大的参数步长被压低，梯度小的被放大，仍需设定 η。"
+    },
+    {
+      "q": "`df.groupby('city')['price'].mean()` 输出的是？",
+      "options": ["全表价格均值（一个数）", "按城市分组的平均价格（city 为索引的 Series）", "每个城市的前 5 行", "报错，必须先用 merge"],
+      "answer": 1,
+      "explain": "split-apply-combine：按 city 拆分、每组求 price 均值、合并成一个以 city 为索引的 Series。"
+    },
+    {
+      "q": "`pd.merge(A, B, on='id', how='left')` 的行为是？",
+      "options": ["只保留 A、B 都有的 id 行", "保留 A 的全部行，B 中匹配不上的列填 NaN", "保留 B 的全部行", "把 A、B 纵向堆叠"],
+      "answer": 1,
+      "explain": "左连接以左表为基准：右表缺失的键对应字段填 NaN。'inner' 才是只取交集；纵向堆叠是 concat。"
+    },
+    {
+      "q": "拿到一个陌生的深度学习任务，关于优化器的合理起步策略是？",
+      "options": ["一律手写牛顿法", "先用 Adam（lr≈1e-3）跑通基线，再按需换 SGD+Momentum 调优", "学习率设 10.0 保证收敛快", "只用全量梯度下降"],
+      "answer": 1,
+      "explain": "Adam 对学习率不敏感、开箱即用，适合建立基线；SGD+Momentum 上限更高但调参成本大，留给后期优化。"
+    }
+  ]
+}

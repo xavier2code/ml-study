@@ -1,0 +1,71 @@
+{
+  "day": 46,
+  "title": "BatchNorm / LayerNorm / GroupNorm",
+  "sections": [
+    {
+      "h": "归一化：训练稳定性的「红绿灯」",
+      "md": "深度网络训练时，一层的参数更新会改变它的输出分布——下游层面对的是**不断漂移的输入分布**，学到的东西反复失效。这叫 **Internal Covariate Shift**（原始动机，后来的解释更朴素：归一化让损失曲面更平滑、可用更大学习率）。\n\n归一化层的共同动作：**把激活减均值除标准差，再学一对缩放平移 γ、β**。三家区别只在「沿哪些维度统计」：\n\n```\nx: (N, C, H, W)   # N batch, C 通道\nBatchNorm: 对每个 C，统计 (N,H,W)   → 逐通道\nLayerNorm: 对每个样本，统计 (C,H,W) → 逐样本\nGroupNorm:  把 C 分组，统计每组内 (C/g,H,W)\n```\n\n选维度就是选「跟谁比」：跟整个 batch 比（BN）、跟自己比（LN）、跟小组比（GN）。"
+    },
+    {
+      "h": "BatchNorm：借整个 batch 的统计量",
+      "md": "对每个通道 c 独立地用 batch 内统计量归一：\n\n```\nμ_c, σ_c = mean/var(x[:,c,:,:])     # 在 (N,H,W) 上\nx̂ = (x − μ)/√(σ²+ε)\nout = γ·x̂ + β                       # γ β 可学习，初始 1 和 0\n```\n\n**训练/推理行为不同**（今天最重要的坑）：训练用 batch 统计量，且用滑动平均把 μ、σ 存进 buffer；**推理时改用 buffer 里的历史平均**——因为推理可能只有一条样本，算不出 batch 统计。\n\n由此带来两个限制：\n\n1. **batch 太小（<8）统计量噪声大**，效果打折——目标检测、大模型训练常中招\n2. **依赖样本独立**：batch 内样本互相影响，和对比学习/增强场景天然打架\n\n经验法则：BN 放在 conv 之后、激活之前；与 Day 45 的 dropout 同用要谨慎（BN 统计量被随机扰动）。"
+    },
+    {
+      "h": "LayerNorm / GroupNorm：摆脱 batch",
+      "md": "**LayerNorm** 对**每个样本**的所有激活统计均值方差——与 batch 大小完全无关，一条样本也能归一。代价：通道间的差异被抹平。它统治了 **NLP/transformer**：序列长度可变、batch 可能很小、且自回归推理时逐 token 生成，BN 的 batch 统计根本没法用。transformer 的 LN 作用在最后一维（特征维）。\n\n**GroupNorm**（2018）是折中：通道分成 g 组（如 32），组内归一。batch 无关 + 保留通道结构，小 batch 的视觉任务（检测、分割、视频）里是 BN 的替代品。\n\n| | 统计维度 | 依赖 batch | 典型场景 |\n|---|---|---|---|\n| BN | (N,H,W) 逐通道 | 强 | 大 batch CNN 分类 |\n| LN | (C,H,W) 逐样本 | 无 | transformer/NLP |\n| GN | 组内 (C/g,H,W) | 无 | 检测/分割、小 batch |\n\n```python\nnn.BatchNorm2d(64)                # CNN\nnn.LayerNorm(d_model)             # transformer\nnn.GroupNorm(32, 64)              # 64 通道分 32 组\n```"
+    },
+    {
+      "h": "实战：CIFAR-10 三家对比",
+      "md": "同一 ResNet-18 骨架，只换归一化层，各训 50 epoch（batch=128）：\n\n```python\nnorms = {'bn': nn.BatchNorm2d, 'gn': lambda c: nn.GroupNorm(32, c)}\n# LN 对 (N,C,H,W) 需 reshape 或用 GroupNorm(1,c) 近似逐样本全归一\n```\n\n预期观察（跑出数据才有发言权）：\n\n1. **BN 收敛最快**：大 batch 下统计准，前 10 epoch 一骑绝尘\n2. **GN 略慢但最终精度接近 BN**：小 batch（试试 8）时反超——BN 统计噪声开始伤人\n3. **验证时 BN 的 acc 稳定**：靠 buffer 里的滑动平均；如果 train/eval 切换写错，立刻掉几个点\n\n再做一个消融：把 batch 降到 8 重跑，看 BN 相对 GN 的优势如何消失——这就是「BN 绑定 batch 大小」的体感版。"
+    },
+    {
+      "h": "今日串联 + LLM 关联",
+      "md": "本周从反向传播走到工程三件套（数据管道、混合精度、正则化），归一化是训练稳定性的最后一块拼图：它重置激活量级，让 Day 40 的初始化更宽容、Day 44 的低精度数值更稳。\n\n**LLM 关联**：\n\n- transformer 标配 **LayerNorm**（batch 无关、序列可变）；GPT-2 是 **Post-LN**（残差后归一化），GPT-3/Llama 改 **Pre-LN**（归一化放子层前）——残差主干保持干净数值，百层可训，与 Day 42 的「梯度高速公路」呼应\n- Llama 又进化出 **RMSNorm**：去掉均值中心化，只除 RMS，少一次统计、更快——今天的 LN 直系简化版\n- BN 在 LLM 里几乎绝迹：自回归逐 token 推理 + 各样本长度不一，batch 统计无从谈起\n- 训练不稳定排查顺序（工程经验）：学习率 → 初始化 → 归一化位置 → 数值精度——本周四天正好是这个清单"
+    }
+  ],
+  "keyPoints": [
+    "归一化共同动作：减均值除标准差再学 γ·x̂+β；三家区别只在统计维度",
+    "BN 逐通道用 batch 统计 (N,H,W)；训练用 batch 均值方差、推理用 buffer 滑动平均",
+    "BN 绑定 batch 大小：batch<8 统计噪声大、精度打折；且使 batch 内样本互相影响",
+    "LN 逐样本统计与 batch 无关，是 transformer/NLP 的标准选择；GN 分组折中，小 batch 视觉任务用",
+    "LLM 演进：Post-LN→Pre-LN（残差主干干净、百层可训）→RMSNorm（Llama，只除 RMS 更快）"
+  ],
+  "quiz": [
+    {
+      "q": "BatchNorm 推理阶段使用什么统计量归一化？",
+      "options": ["当前 batch 的均值方差", "训练期间用滑动平均存在 buffer 里的历史均值方差", "全部设为 0 和 1", "每个样本自己算"],
+      "answer": 1,
+      "explain": "推理可能只有一条样本，无法算 batch 统计；训练时同步维护 running_mean/running_var，eval 时直接使用。"
+    },
+    {
+      "q": "transformer 为什么选 LayerNorm 而不是 BatchNorm？",
+      "options": ["LN 计算量更小", "逐样本统计与 batch 无关，适应变长序列与逐 token 的自回归推理", "BN 不能用在 GPU 上", "LN 不需要 γ β"],
+      "answer": 1,
+      "explain": "NLP 里 batch 小、序列长短不一、生成时逐 token 前向，BN 的 batch 维统计无从谈起；LN 对单个样本的最后一维归一，天然兼容。"
+    },
+    {
+      "q": "GroupNorm(32, 64) 的含义是？",
+      "options": ["64 通道分成 32 组，组内归一", "batch 分成 32 组", "把输入缩小 32 倍再归一", "32 个 BN 层串联"],
+      "answer": 0,
+      "explain": "第一参数是组数、第二是通道数：每 2 个通道共享一组统计量，batch 无关且保留通道结构——小 batch 视觉任务的 BN 替代。"
+    },
+    {
+      "q": "训练好的 BN 模型评估时忘了 model.eval()，会发生什么？",
+      "options": ["显存翻倍", "继续用 batch 统计量且更新 buffer，评估结果波动、不可复现", "自动转成 LayerNorm", "速度不变结果不变"],
+      "answer": 1,
+      "explain": "train 模式下 BN 用当前 batch 的 μ σ 并继续改写 buffer：不同 batch 顺序结果不同、小 batch 精度掉点——与 Dropout 一样靠 eval() 关闭。"
+    },
+    {
+      "q": "Pre-LN（如 Llama 的结构：归一化放在注意力子层之前）相对 Post-LN 的好处是？",
+      "options": ["参数更少", "残差主干上没有归一化阻挡，梯度直通，深层网络训练更稳", "推理更快", "不需要 γ β"],
+      "answer": 1,
+      "explain": "Post-LN 在残差相加之后再归一化，梯度仍要穿过归一化节点；Pre-LN 让 x + f(LN(x)) 的主干保持加法直通——百层 transformer 可训的关键。"
+    },
+    {
+      "q": "RMSNorm 相比 LayerNorm 简掉了什么？",
+      "options": ["减均值（中心化）这一步，只用 RMS 缩放", "γ 和 β", "除以标准差", "dropout"],
+      "answer": 0,
+      "explain": "RMSNorm 保留按均方根缩放和可学 γ，去掉均值中心化：少一次统计计算，Llama 系列用它换来效率，效果与 LN 相当。"
+    }
+  ]
+}

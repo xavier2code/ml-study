@@ -1,0 +1,71 @@
+{
+  "day": 155,
+  "title": "端到端项目完善",
+  "sections": [
+    {
+      "h": "最后打磨：从「能演示」到「敢开源」",
+      "md": "昨天录完 demo，今天做三件事把项目推到可托付状态：**修已知 bug、加测试、上 CI**，再补全 README 与架构图。判断「敢开源」的朴素标准：\n\n- clone 下来 `make setup && make test` 一条链全绿\n- 偶发故障有测试兜底，回归一眼可见\n- 陌生人不用问你任何问题就能跑起来、看懂、改第一行代码\n\nLLM 项目的测试有个特殊现实：**输出概率性、外部依赖重**（GPU、模型服务、API）。今天的核心技巧就是围绕它——把「确定性逻辑」和「概率性输出」分层测试。"
+    },
+    {
+      "h": "修 bug：先让故障可复现",
+      "md": "复盘你 demo 时踩过的坑，修的纪律是「**每个 bug 先写复现测试再修**」，否则无法验证真修好：\n\n- 音轨缺失（纯画面视频）→ ffmpeg 无输出导致崩溃 → 修复：探查流存在再处理，缺音轨返回明确错误码\n- 超长视频爆 context → 修复：按时长上限分片处理再归并（Day 149 结论落地）\n- 中文文件名/特殊字符路径 → 修复：统一 `pathlib` + 临时文件重命名\n- 转写为空（极短或纯音乐）→ 下游 prompt 拼出空段 → 修复：空值短路 + 结构完整校验\n\n```python\ndef safe_transcribe(video: Path):\n  if not has_audio_stream(video):\n    raise NoAudioError(video)      # 明确错误优于静默空串\n  segs = asr.transcribe(video)\n  if not segs.text.strip():\n    return Transcription(empty=True)  # 调用方按协议处理\n  return segs\n```\n\n边界条件的清单思维直接来自你的后端经验：空输入、超长输入、编码异常、外部服务 5xx——每类至少一个测试。"
+    },
+    {
+      "h": "测试策略：确定性分层 + 概率性采样",
+      "md": "三层测试金字塔，成本从低到高：\n\n**1. 纯逻辑单测（秒级，必须 100% 覆盖核心）**——不碰模型的一切：限流桶、灰度哈希、时间戳解析、prompt 拼装、JSON schema 校验：\n\n```python\ndef test_variant_stable():\n  assert variant(\"user-42\") == variant(\"user-42\")\n\ndef test_rate_limit():\n  for _ in range(2): check(tenant_free)\n  with pytest.raises(HTTPException) as e:\n    check(tenant_free)\n  assert e.value.status_code == 429\n```\n\n**2. 概率输出测「不变量」而非「精确值」**——LLM 输出固定 JSON schema？断言字段齐全、类型正确、关键实体可溯源（幻觉检查的自动化版）；转写断言 CER < 阈值而不是逐字相等。\n\n**3. 冒烟测试（分钟级，CI 里标记 slow）**——真实模型跑一条 30 秒样本走全链路，只断言「成功返回 + 结构完整」。模型服务可用 fixture/mock 替身（录制的响应重放），CI 无 GPU 也能跑前两层。"
+    },
+    {
+      "h": "CI：把质量变成流水线的默认态",
+      "md": "GitHub Actions 一个文件搞定：push 跑 lint + 单测，PR 额外跑冒烟 + README 链接检查：\n\n```yaml\nname: ci\non: [push, pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-python@v5\n        with: {python-version: \"3.11\"}\n      - run: pip install -e \".[dev]\"\n      - run: ruff check . && ruff format --check .\n      - run: pytest -m \"not slow\" --cov=videomind\n      - run: pytest -m slow   # 仅 PR，需模型服务\n        if: github.event_name == 'pull_request'\n```\n\n要点：**`-m \"not slow\"` 默认跳过依赖 GPU 的用例**，PR 再放量；覆盖率只对纯逻辑层设阈值（如 85%），概率层不强求——追求无意义数字会逼出脆断言。CI 绿了才有资格谈开源。"
+    },
+    {
+      "h": "架构图与收尾：160 天的终点线",
+      "md": "最终架构图一张纸讲清系统（建议用 draw.io 或 excalidraw 画成三列）：\n\n```\n客户端 ── FastAPI 网关（限流/租户/灰度）\n              │\n   ┌──────────┼──────────┐\n   ▼          ▼          ▼\nASR 服务   VLM 服务   Langfuse\n(Paraformer) (Qwen-VL)  (trace)\n   └──────────┴──────────┘\n              ▼\n      LLM 融合 → 结构化 JSON\n```\n\nREADME 按昨天的检验标准补齐：架构图置顶、快速开始、curl 示例、配置表、测试与 CI 徽章（`![CI](…)`）、已知局限。\n\n到这里 155/160 天：从 Day 1 的熵与 numpy，到 ViT、ASR、Agent、生产化——你已具备从零构建并交付一套 LLM 系统的全链条能力。剩下 5 天是总复习与展望，把手上的项目当作作品集的第一块基石。"
+    }
+  ],
+  "keyPoints": [
+    "敢开源标准：clone 后 make setup && make test 一条链全绿，陌生人零提问可跑通",
+    "修 bug 纪律：每个 bug 先写复现测试再修；边界清单——空输入、超长输入、编码异常、外部服务 5xx",
+    "测试三层金字塔：纯逻辑单测（全覆盖）→ 概率输出测不变量（schema 齐全/CER 阈值/实体可溯源）→ 冒烟全链路（slow 标记）",
+    "CI 用 -m \"not slow\" 默认跳过 GPU 用例；覆盖率阈值只对纯逻辑层设置，概率层不强求",
+    "最终架构图三列：网关（限流/灰度）→ 三服务（ASR/VLM/trace）→ LLM 融合输出；README 加 CI 徽章"
+  ],
+  "quiz": [
+    {
+      "q": "修复「纯画面视频导致 ffmpeg 崩溃」的 bug，最规范的流程是？",
+      "options": ["直接改代码提交", "先写复现测试（无音轨样本 → 期望明确错误），再修复让测试转绿", "在 README 里标注不支持", "用 try/except 吞掉异常"],
+      "answer": 1,
+      "explain": "复现测试既是修复的验证，也是未来的回归护栏；吞异常只是把故障延迟到更深的调用栈。"
+    },
+    {
+      "q": "对 LLM 生成的结构化总结，合理的测试断言是？",
+      "options": ["断言输出与上次完全一致", "断言 JSON 四字段齐全、类型正确、关键实体可在转写中溯源", "断言每个字都在词表内", "不做测试，靠人工看"],
+      "answer": 1,
+      "explain": "概率输出测不变量：结构与可溯源性是稳定的验收维度；逐字断言在概率系统里必然随机失败。"
+    },
+    {
+      "q": "CI 里用 `-m \"not slow\"` 跳过冒烟测试的用例，主要原因是？",
+      "options": ["冒烟测试不重要", "冒烟依赖 GPU/模型服务，普通 runner 跑不了或太贵；PR 阶段再选择性跑", "pytest 不支持长测试", "避免和 lint 冲突"],
+      "answer": 1,
+      "explain": "分层执行：无 GPU 的 push 跑快测保反馈速度；依赖真实模型的用例标记 slow，在 PR 或自托管 runner 上执行。"
+    },
+    {
+      "q": "代码覆盖率指标应该如何设置？",
+      "options": ["全仓库统一 100%", "只对纯逻辑层（限流/哈希/prompt 拼装）设阈值如 85%，概率输出层不强求", "不设任何指标", "只统计测试文件数量"],
+      "answer": 1,
+      "explain": "对概率层强设覆盖率会逼出针对具体输出的脆断言；阈值应聚焦确定性代码——那里测试才既可行又有价值。"
+    },
+    {
+      "q": "项目「敢开源」最核心的可验证标准是？",
+      "options": ["星标数多", "陌生人 clone 后按 README 一条命令链 setup+test 全绿、无需提问", "代码超过一万行", "使用了最新的模型"],
+      "answer": 1,
+      "explain": "开源项目的第一交互是「跑起来」：可复现、有测试兜底、文档自足，三者构成可验证的工程成熟度。"
+    },
+    {
+      "q": "最终架构图应该包含哪些信息层？",
+      "options": ["只画模型参数量", "客户端入口、网关（限流/租户/灰度）、三个后端服务、LLM 融合与输出，及观测链路", "只画数据表结构", "只画用户操作流程"],
+      "answer": 1,
+      "explain": "架构图是系统的地图：请求路径、各服务职责、控制点（限流/灰度）与观测面（trace）一目了然，才能支撑讲清设计。"
+    }
+  ]
+}

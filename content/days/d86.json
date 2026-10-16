@@ -1,0 +1,101 @@
+{
+  "day": 86,
+  "title": "DataLoader 优化（packaging / num_workers）",
+  "sections": [
+    {
+      "h": "先测瓶颈，再谈优化",
+      "md": "直觉：训练一步的时间 = max(GPU 计算, 数据供给)。数据供给不上时 GPU 在空转——**没吃满的 GPU 不是在训练，是在等**。先量化再动手：\n\n1. `nvidia-smi -l 1` 看利用率：计算密集应 90%+，长期 50% 徘徊多半是数据饿的\n2. 训练循环里给 loader 计时：取 batch 等待占每步两成以上，优化数据管道收益立现\n3. 对照实验：数据整体常驻 GPU 裸跑循环——提速多少，说明数据管道欠多少\n\nLLM 预训练尤其敏感：每步要喂几百万 token，**吞吐跟不上，再大的集群也算力闲置**。今天两招：sample-packing 消灭 padding 浪费，DataLoader 调优消灭取数等待。"
+    },
+    {
+      "h": "sample-packing：把序列塞满",
+      "md": "问题：文档长短不齐。若一个样本 = 一个文档，短文档要 pad 到 max_len——pad 位**占显存却贡献零梯度**，变长数据集上浪费可达 30%–50%。\n\n解法（GPT-NeoX/Megatron 均用）**sample-packing**：多文档首尾相接拼进同一条 max_len 序列，像装箱：\n\n```\ndoc₁(1200) + doc₂(700) + doc₃(148) → 一条 2048 的样本\n```\n\n两个细节：文档之间放 EOS 分隔，最简单的实现不做任何特殊处理——模型看得见「隔壁文档」，实践伤害很小；严格版用**块对角 attention mask** 隔离文档，但要自定义 mask。此外可把跨文档的预测位置从损失里挖掉（loss mask），避免模型学「在任意位置突然开新话题」。"
+    },
+    {
+      "h": "实现 sample-packing",
+      "md": "思路：「先接长条，再等宽切块」——所有文档 id 连成一条，按 max_len 无重叠切片，天然零 padding：\n\n```python\nclass PackedDataset(torch.utils.data.Dataset):\n    def __init__(self, token_files, max_len=2048, eos=0):\n        ids = []\n        for f in token_files:              # .bin 文件，uint16 数组\n            ids.append(np.fromfile(f, dtype=np.uint16))\n            ids.append(np.array([eos], dtype=np.uint16))\n        self.data = np.concatenate(ids)\n        self.max_len = max_len\n        self.n = len(self.data) // max_len\n\n    def __len__(self):\n        return self.n\n\n    def __getitem__(self, i):\n        chunk = self.data[i*self.max_len : (i+1)*self.max_len]\n        x = torch.from_numpy(chunk[:-1].astype(np.int64))\n        y = torch.from_numpy(chunk[1:].astype(np.int64))\n        return x, y                  # 输入与目标错开一位\n```\n\n切在文档中间是**故意的**——让模型从任意字节流学续写并无害处，且完全消灭 padding。对比：「单文档+pad」vs「packing」测每秒 token 吞吐，后者通常高 30% 以上。"
+    },
+    {
+      "h": "DataLoader 调优四旋钮",
+      "md": "包装上面的 Dataset：\n\n```python\nloader = torch.utils.data.DataLoader(\n    ds, batch_size=16, drop_last=True,\n    num_workers=4,           # 并行取数进程数\n    pin_memory=True,         # 锁页内存加速 host→device\n    prefetch_factor=4,       # 每 worker 预取 batch 数\n    persistent_workers=True  # 跨 epoch 复用 worker\n)\nfor x, y in loader:\n    x = x.to('cuda', non_blocking=True)\n    y = y.to('cuda', non_blocking=True)\n```\n\n为什么：**num_workers** 让子进程预备下一批，起点单机 4–8，但 worker 争抢 CPU 与内存，实测扫描取峰值；**pin_memory** 因 GPU DMA 只能从锁页内存直传，配合 `non_blocking=True` 让传输与计算重叠；**prefetch_factor** 是预取深度，默认 2，管线抖动（读慢盘）时加大；**persistent_workers** 免去每 epoch 重启 worker 的初始化开销。\n\n> 调优纪律：一次只动一个旋钮，固定步数测吞吐并记录。"
+    },
+    {
+      "h": "今日串联：数据管道毕业",
+      "md": "至此数据侧三连完成：**清洗去重**（Day 85，决定上限）→ **packing**（消灭 padding）→ **DataLoader 并行预取**（消灭等待）。三招叠完，训练吞吐常见 2× 以上的总提升。\n\n放进大图：nanoGPT 的 prepare.py 生成的 `train.bin` 本来就是「连成一条再读块」的 packing 式设计——你今天理解了它为什么这么写，也有能力自己从清洗后的语料一路做到 DataLoader。\n\n下一步预告：训练侧效率——混合精度、梯度累积与分布式入门。"
+    }
+  ],
+  "keyPoints": [
+    "先量化再优化：GPU 利用率 + 取 batch 等待占比，确认瓶颈在数据再动手",
+    "sample-packing：多文档拼接成 max_len 长条再切块，消灭 padding 的显存与算力浪费",
+    "严格版 packing 用块对角 attention mask 隔离文档；简单版用 EOS 分隔即可拿走大部分收益",
+    "num_workers 实测扫描取最优（单机常 4–8），过大反而争抢资源",
+    "pin_memory + non_blocking 重叠传输与计算；persistent_workers 免去每 epoch 重启开销"
+  ],
+  "quiz": [
+    {
+      "q": "训练时 GPU 利用率长期只有 50% 左右，最值得先检查什么？",
+      "options": [
+        "模型层数是否够深",
+        "数据供给：取 batch 的等待时间占比与 loader 配置",
+        "学习率是否太大",
+        "损失函数选择"
+      ],
+      "answer": 1,
+      "explain": "利用率低通常意味着 GPU 在等数据：先测每步里取 batch 的等待时间，再调 num_workers/pin_memory/packing。"
+    },
+    {
+      "q": "sample-packing 提升吞吐的根本原因是？",
+      "options": [
+        "把序列变短了",
+        "消除 padding：每个位置都是真实 token，不浪费显存与计算",
+        "减少了 epoch 数",
+        "降低了学习率"
+      ],
+      "answer": 1,
+      "explain": "短文档 pad 到 max_len 时，pad 位占据 batch 维度却贡献零梯度；拼接装箱后 2048 个位置全是有信号的内容。"
+    },
+    {
+      "q": "简单版 packing 中文档之间通常怎么分隔？",
+      "options": [
+        "必须用全零向量",
+        "插入一个 EOS token，不做特殊注意力处理",
+        "随机插入噪声 token",
+        "无法分隔，必须丢弃短文档"
+      ],
+      "answer": 1,
+      "explain": "EOS 分隔 + 不做特殊处理是教学/工程常用做法；严格做法才上块对角 mask 隔离跨文档注意力。"
+    },
+    {
+      "q": "pin_memory=True 与 non_blocking=True 配合的作用是？",
+      "options": [
+        "减少 GPU 显存占用",
+        "让 host→device 传输走锁页内存并与计算重叠，隐藏传输延迟",
+        "提高学习率稳定性",
+        "防止数据被重复加载"
+      ],
+      "answer": 1,
+      "explain": "GPU 的 DMA 直传要求锁页内存；non_blocking 让 copy 异步发出，与 GPU 计算流水线并行。"
+    },
+    {
+      "q": "关于 num_workers，下列说法正确的是？",
+      "options": [
+        "越大越好，设成 CPU 核数的 4 倍",
+        "必须等于 GPU 数量",
+        "经验起点 4–8 并实测扫描；过大时 worker 争抢 CPU 与内存反而变慢",
+        "只影响内存不影响速度"
+      ],
+      "answer": 2,
+      "explain": "worker 各自占用内存与 CPU，过多会互相争抢；正确做法是固定其他参数，扫描几档测每秒 token 吞吐取峰值。"
+    },
+    {
+      "q": "persistent_workers=True 解决的问题是？",
+      "options": [
+        "梯度累积太慢",
+        "每个 epoch 结束 worker 进程被销毁重建（重新加载/初始化）的开销",
+        "显存碎片",
+        "学习率衰减过快"
+      ],
+      "answer": 1,
+      "explain": "默认行为下每个 epoch 重新拉起 worker、重跑初始化逻辑；小数据集 epoch 很短时这笔重启税很高，persistent 让 worker 常驻。"
+    }
+  ]
+}

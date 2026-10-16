@@ -1,0 +1,65 @@
+{
+  "day": 136,
+  "title": "向量数据库：Milvus / Qdrant",
+  "sections": [
+    {
+      "h": "为什么需要专门的向量数据库",
+      "md": "FAISS 是**库**不是**服务**：跑在进程内，没有增量 upsert、没有元数据过滤、没有多租户与高可用，重启即丢（或要自己管快照）。pgvector 够用在千万级以下、且团队已重仓 PostgreSQL 时。一旦到生产，你要的是：\n\n- **标量过滤**：检索时带 `WHERE department = \"售后\" AND level <= 2`——权限过滤的机制保证\n- **CRUD 与增量**：文档更新后 upsert 对应向量，删旧插新不能全量重建\n- **水平扩展与副本**：分片（shard）、副本（replica）、快照备份\n- **可运维性**：监控指标、资源隔离、滚动升级\n\n这就是 Milvus / Qdrant / Weaviate / Pinecone 这个品类存在的原因。今天对比两大开源自部署代表，并动手压测。"
+    },
+    {
+      "h": "HNSW：向量索引的核心算法",
+      "md": "上亿向量不可能暴力全扫，生产默认索引是 **HNSW（分层可导航小世界图）**——思想类似跳表：\n\n- 建图时每个节点随机分配层级；顶层节点稀疏、边是\"长边\"，底层稠密、边是\"短边\"\n- 查询从顶层入口**贪心走向更接近 query 的邻居**，逐层下降；到底层时已在答案邻域内，做小范围精确搜索\n\n三个参数决定一切：\n\n| 参数 | 作用 | 调大的代价 |\n|---|---|---|\n| M | 每节点连接数 | 内存↑、建图慢，召回↑ |\n| ef_construct | 建图时候选队列 | 建索引时间↑，图质量↑ |\n| ef_search | 查询时候选队列 | **延迟↑，召回↑**（线上主旋钮） |\n\n要点：HNSW 是**近似**最近邻——用召回率换速度，不保证找到真正的 top-1。所以压测必须同时报\"QPS / 延迟 / recall@k\"三元组，只报 QPS 的数字没有意义（把 ef_search 调到 1，QPS 能翻几倍，召回稀烂）。内存方面：1M × 1024 维 float32 ≈ 4GB（纯向量），标量量化（SQ8）可压到 1/4，代价是少量召回损失。"
+    },
+    {
+      "h": "Milvus vs Qdrant 对比",
+      "md": "| 维度 | Milvus | Qdrant |\n|---|---|---|\n| 语言/架构 | Go，云原生分布式（依赖 etcd + 对象存储 + 消息队列） | Rust，单二进制起步，可平滑扩分布式 |\n| 部署复杂度 | 高（一套小集群） | 低（`docker run` 即生产可用） |\n| 标量过滤 | 支持 | 支持，payload 过滤 + pre-filter 设计很讲究 |\n| 索引类型 | IVF / HNSW / DiskANN 等 | HNSW 为主 + 量化 |\n| 规模舒适区 | 十亿级 | 亿级 |\n| 生态 | 国内云厂托管多、大厂案例多 | 轻量、开发者体验好、Cloud 省心 |\n\n选型经验：**团队小、千万到亿级、要快速落地 → Qdrant 单机 + 定期快照；十亿级向量、有专职运维、要多索引类型 → Milvus 集群**。注意 Milvus 的分布式依赖链意味着\"demo 五分钟，生产一套 K8s 组件\"——小团队别为了简历上写 Milvus 背上运维债。"
+    },
+    {
+      "h": "动手：Qdrant 部署 + 1M 文档压测",
+      "md": "部署一行：`docker run -p 6333:6333 -v $(pwd)/qdrant_data:/qdrant/storage qdrant/qdrant`。然后建 collection、灌数据、压测：\n\n```python\nfrom qdrant_client import QdrantClient, models\nimport random, time\n\nq = QdrantClient(\"http://localhost:6333\")\nq.create_collection(\n    \"docs\", vectors_config=models.VectorParams(\n        size=1024, distance=models.Distance.COSINE,\n        quantization_config=models.ScalarQuantization(\n            scalar=models.ScalarQuantizationConfig(type=models.ScalarType.INT8))),\n    hnsw_config=models.HnswConfigDiff(m=16, ef_construct=200))\n\n# 灌 1M：batch 1000，payload 带部门与密级\npoints = [models.PointStruct(\n    id=i, vector=embed(texts[i]),\n    payload={\"dept\": random.choice([\"售后\",\"销售\"]), \"level\": 1})\n    for i in range(1000)]\nfor b in range(1000):\n    q.upsert(\"docs\", points=points)\n\n# 压测：带过滤的查询，统计 QPS / p99 / recall@10\nhits = q.query_points(\"docs\", query=embed(\"怎么退货\"), limit=10,\n    query_filter=models.Filter(must=[\n        models.FieldCondition(key=\"dept\", match=models.MatchValue(value=\"售后\"))])).points\n```\n\n压测脚本要点：并发线程压 QPS 与 p50/p99；recall@10 用同一批 query 的**全量暴力扫描**结果做金标准对比；分别测\"无过滤\"与\"带过滤\"两档。经验量级：1M × 1024 维，单机 Qdrant 无过滤 p99 常在 10ms 级，QPS 数百到上千（机器与 ef_search 而定）；带过滤时**给 payload 字段建索引**（`create_payload_index`），否则过滤退化为全扫，p99 直接爆炸。"
+    },
+    {
+      "h": "工程坑清单",
+      "md": "- **深分页用 search_after**（score threshold / point id 游标），`offset=10000` 式翻页会拖垮 HNSW\n- **payload 必须建索引**：dept/level 这类过滤字段不建索引等于每次全扫\n- **过滤与图的冲突**：过滤条件太狠时 HNSW 候选可能被剪空，Qdrant 用过滤重打分缓解，极端情况要调大 oversampling\n- **多租户三选一**：collection 按租户分（隔离强、数量多时元数据爆炸）/ payload 按租户分（通用）/ 单租户单实例（最贵最干净）——按合规要求定，不是按性能定\n- **量化上线前测召回**：SQ8 通常掉 <1% recall，但别信教程，信自己的压测\n\n明天进入检索质量优化：Rerank + HyDE + Multi-Query——这一天的组合拳往往是 RAG 效果提升最大的一步。"
+    }
+  ],
+  "keyPoints": [
+    "生产向量库的核心能力：标量过滤（权限的机制保证）、增量 upsert、分片副本、可运维性——FAISS 只是进程内库",
+    "HNSW = 分层图上的贪心导航；M/ef_construct 管建图质量，ef_search 是线上召回/延迟主旋钮，本质是近似检索",
+    "压测必须同时报 QPS / 延迟 / recall@k：只报 QPS 无意义",
+    "选型：小团队亿级以下 Qdrant（单二进制、体验好），十亿级+专职运维选 Milvus（分布式但要背一套依赖链）",
+    "payload 字段建索引、深分页用 search_after、多租户按合规而非性能选型"
+  ],
+  "quiz": [
+    {
+      "q": "把 HNSW 的 ef_search 从 64 调到 256，最可能发生什么？",
+      "options": ["召回率下降、延迟下降", "召回率上升、单查询延迟上升、QPS 下降", "内存占用减半", "索引需要全量重建"],
+      "answer": 1,
+      "explain": "ef_search 是查询时候选队列大小：调大意味着在图里探索更多节点，找到真近邻的概率更高（召回↑），但单次查询做的距离计算更多（延迟↑、QPS↓）。它是线上少数不需要重建索引就能调的旋钮。"
+    },
+    {
+      "q": "为什么生产系统很少直接用裸 FAISS 作为主存储？",
+      "options": ["FAISS 检索速度太慢", "FAISS 是进程内库：缺元数据过滤、增量 upsert、多租户、高可用与持久化等服务能力", "FACLS 不支持 HNSW", "FAISS 只能处理 768 维向量"],
+      "answer": 1,
+      "explain": "FAISS 算法层面又快又全（IVF/HNSW 都有），但它是库不是服务：没有 CRUD 语义、没有带过滤的检索、没有副本与监控。生产需要的恰恰是这些服务能力——这正是向量数据库品类的价值。"
+    },
+    {
+      "q": "向量库压测报告只给出 \"QPS 5000\"，为什么说这个数字没有意义？",
+      "options": ["因为 QPS 与硬件无关", "因为近似索引可以在牺牲召回的情况下任意拉高 QPS，必须连同 recall@k 与延迟分位一起报告", "因为 QPS 应该由测试脚本决定", "因为向量库不需要压测"],
+      "answer": 1,
+      "explain": "HNSW 是近似的：把 ef_search 压到极小，QPS 可以翻几倍而 recall 掉到没法用。有效的压测结果是\"QPS / p99 / recall@10\"三元组的帕累托曲线，单点 QPS 无法说明质量。"
+    },
+    {
+      "q": "检索时 payload 过滤（如 dept=\"售后\"）突然从 5ms 掉到 500ms，最先应该检查什么？",
+      "options": ["换一个更大的 embedding 模型", "过滤字段是否建了 payload 索引——没建索引时过滤会退化为全量扫描", "把 ef_search 调大", "增加 QPS 并发"],
+      "answer": 1,
+      "explain": "向量走 HNSW 很快，但标量过滤如果没有索引，候选集的 payload 要逐条线性检查，过滤字段基数高时直接成为瓶颈。create_payload_index 一行代码往往就是 100 倍差距。"
+    },
+    {
+      "q": "1M 条 1024 维 float32 向量的纯向量内存大约是多少？用 SQ8 量化后呢？",
+      "options": ["约 4GB；SQ8 后约 1GB", "约 400MB；SQ8 后约 100MB", "约 40GB；SQ8 后约 20GB", "无法估算，取决于查询量"],
+      "answer": 0,
+      "explain": "1M × 1024 × 4 字节 ≈ 4.1GB；SQ8 把每维从 32bit 压到 8bit，内存 1/4 ≈ 1GB，代价通常是 <1% 的召回损失。容量规划时还要叠加 HNSW 图结构与 payload 的开销。"
+    }
+  ]
+}

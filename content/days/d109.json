@@ -1,0 +1,71 @@
+{
+  "day": 109,
+  "title": "DPO 数据准备",
+  "sections": [
+    {
+      "h": "DPO 数据和 SFT 数据差在哪",
+      "md": "昨天推导了 DPO 损失，今天喂它口粮。**SFT 数据是「一个问题一个好答案」，DPO 数据是「一个问题 + 一好一坏两个答案」**（chosen/rejected 对）。损失函数需要同时看到两者才能计算相对差。\n\n直觉：教学生写作文，光给范文不够，还要给一篇反面范文——「看清差距」比「模仿标准」更能拉开水平。\n\n与 Agent 关联：偏好对在 Agent 场景天然存在——同一个任务，一次工具调用成功、一次失败；一次回答被用户点赞、一次被点踩。攒下这些对子，就是现成的 DPO 数据。"
+    },
+    {
+      "h": "UltraFeedback / HH-RLHF 数据格式",
+      "md": "**1. UltraFeedback**（2023，OpenBTeam）：用 GPT-4 给 64K 指令的多模型回答打分（helpfulness 等 4 维 1~5 分），原始字段：\n\n```json\n{\"instruction\": \"写一首关于春天的诗\",\n \"completions\": [\n   {\"response\": \"春风拂面……\", \"overall_score\": 8.3},\n   {\"response\": \"春天是季节。……\", \"overall_score\": 4.0}\n ]}\n```\n\n做法：按分差配对——取分数最高 vs 最低的回答，分数差需 ≥ 2 才构成有效对比（分差太小噪声大）。\n\n**2. HH-RLHF**（Anthropic，Helpful & Harmless）：人写的偏好对，原生就是成对格式：\n\n```json\n{\"chosen\": \"Human: …\\n\\nAssistant: 好的回答\",\n \"rejected\": \"Human: …\\n\\nAssistant: 差的回答\"}\n```\n\n注意它把对话拼成了纯文本字符串，需要按 \"Human:\"/\"Assistant:\" 标记切开还原成 role 结构。\n\n| 数据集 | 规模 | 偏好来源 | 特点 |\n|---|---|---|---|\n| UltraFeedback | 64K 指令 | GPT-4 打分配对 | 多维分数、可按分差控质量 |\n| HH-RLHF | 160K+ | 众包人工对比 | 双 H 导向、质量稳定 |"
+    },
+    {
+      "h": "统一目标格式",
+      "md": "与 SFT 格式对齐，DPO 标准样本长这样：\n\n```json\n{\n  \"prompt\": [\n    {\"role\": \"user\", \"content\": \"解释什么是梯度下降\"}\n  ],\n  \"chosen\": [\n    {\"role\": \"assistant\", \"content\": \"梯度下降就像下山找谷底……\"}\n  ],\n  \"rejected\": [\n    {\"role\": \"assistant\", \"content\": \"梯度下降是一种东西。\"}\n  ]\n}\n```\n\n三个要点：\n\n- prompt 用 role 数组：多轮时可以放多对 user/assistant 历史，DPOTrainer 自动套 chat template\n- chosen/rejected 只含 assistant 回复部分，模板由 Trainer 统一加——手动拼模板容易和训练时不一致\n- 与 d106 的 SFT 格式同构，一套 schema 服务两个阶段"
+    },
+    {
+      "h": "清洗 + 格式化 5K DPO 数据",
+      "md": "今天主任务：攒 **5000 条中文偏好对**。流水线六步：\n\n```python\ndef make_pair(rec):\n    # 1) 语言：中文字符占比 >60%\n    # 2) 长度：两条回答都 4~1024 字\n    # 3) 分差门槛：overall_score 差 ≥2（UltraFeedback）\n    # 4) 去重：instruction 8-gram 去重\n    # 5) 陷阱过滤：分差全靠长度差撑起来的对子丢弃\n    #    （chosen 500字 vs rejected 8字 = 数据偏差不是偏好信号）\n    # 6) 安全：rejected 若含有害内容直接丢弃整对（防「学会差答案」变成「学到毒」）\n    return {\"prompt\": [...], \"chosen\": [...], \"rejected\": [...]}\n```\n\n第 5 步是隐性大坑：UltraFeedback 的打分对长回答有偏，若不控制长度差，模型会学到「回答越长越好」而非「回答越准越好」。**统计校验**：清洗后对子里 chosen/rejected 平均长度差应 <30%。\n\n来源配比：中文开源偏好集（如 Zhihu 对比数据）为主，UltraFeedback 中文子集补充，按任务分层抽 5K（问答/写作/翻译/代码/闲聊同 d106 比例）。"
+    },
+    {
+      "h": "今日串联",
+      "md": "今天产出 `dpo_zh_5k.jsonl`：5000 条 prompt + chosen/rejected 三元组，过了分差、长度偏差、去重、安全四道闸。偏好数据的质量上限就是 DPO 效果的上限——垃圾对子教出的模型更会胡说。\n\n明日预告：TRL DPOTrainer 实战——加载 SFT 模型当 policy、base 当 ref，把这 5K 对子灌进去，完成 base → SFT → DPO 的端到端对齐闭环，并对比三代模型的 PPL 与人工打分。"
+    }
+  ],
+  "keyPoints": [
+    "DPO 数据三元组：prompt + chosen + rejected；损失需要一好一坏才能算相对差",
+    "UltraFeedback 用 GPT-4 打分按分差配对（分差 ≥2 才有效）；HH-RLHF 人工成对但需切开纯文本还原 role",
+    "统一格式与 SFT 同构：prompt 是 role 数组、chosen/rejected 只含 assistant 回复，模板交给 Trainer",
+    "隐性大坑：不控制长度差会教模型「越长越好」；清洗后 chosen/rejected 平均长度差应 <30%",
+    "安全红线：rejected 含有害内容的对子整对丢弃，防止 DPO 把毒性学进参数"
+  ],
+  "quiz": [
+    {
+      "q": "DPO 训练数据与 SFT 数据最本质的区别是？",
+      "options": ["DPO 数据量更大", "DPO 每条样本含同一 prompt 的一好一坏两个回答（chosen/rejected 对）", "DPO 只有多轮对话", "DPO 不需要 prompt"],
+      "answer": 1,
+      "explain": "DPO 损失计算的是两个回答的相对概率差，必须成对提供；SFT 只需单一标准答案。没有对比就没有偏好信号。"
+    },
+    {
+      "q": "UltraFeedback 构建偏好对的标准做法是？",
+      "options": ["人工逐条撰写两个答案", "用 GPT-4 给多模型回答打分，按分差配对（如差 ≥2 分）", "随机抽两个回答", "按回答长度排序配对"],
+      "answer": 1,
+      "explain": "UltraFeedback 让 GPT-4 作裁判给各模型回答多维打分，分数差足够大的两两配成偏好对；分差太小意味着对比不显著，会引入噪声。"
+    },
+    {
+      "q": "为什么必须过滤「chosen 500 字 vs rejected 8 字」这类对子？",
+      "options": ["短回答质量一定差", "模型会学到「越长越好」的伪偏好而非真实质量差异", "显存放不下长文本", "会拖慢训练"],
+      "answer": 1,
+      "explain": "长度差与质量差混在一起时，DPO 无法区分信号来源，会走捷径学「写长点」。控制长度差（平均 <30%）才能让偏好信号干净。"
+    },
+    {
+      "q": "HH-RLHF 的 chosen/rejected 是拼接好的纯文本（含 Human:/Assistant: 标记），使用前需要？",
+      "options": ["直接喂给 Trainer", "按标记切分还原成 role 结构，模板由 Trainer 统一渲染", "全部翻译成英文", "合并成一条长文本"],
+      "answer": 1,
+      "explain": "手动保留纯文本模板容易与 Trainer 自动套的 chat template 不一致，导致训练/推理格式错位——还原成结构化 role 后交给 Trainer 才安全。"
+    },
+    {
+      "q": "rejected 回答含明显有害内容，正确处理是？",
+      "options": ["保留，反正它是 rejected", "整对丢弃", "只保留 rejected 换成空字符串", "把它标成 chosen"],
+      "answer": 1,
+      "explain": "DPO 会真的「读」rejected 内容并压低其概率，但表示有害内容的 token 分布仍被模型编码，存在被诱导激活的风险；整对丢弃最稳妥。"
+    },
+    {
+      "q": "关于「偏好数据质量是 DPO 效果上限」的理解，哪项最准确？",
+      "options": ["模型够大就能弥补数据差", "DPO 只是放大标注里的偏好信号：标注偏见（如长度偏、套路化）会被忠实放大", "数据质量与 DPO 效果无关", "多跑几个 epoch 可以替代数据质量"],
+      "answer": 1,
+      "explain": "DPO 是无奖励模型的直接优化：它学到的就是数据里的偏好结构本身。偏好若有系统性偏差，模型会精确继承并放大该偏差——所以清洗闸门一道不能省。"
+    }
+  ]
+}

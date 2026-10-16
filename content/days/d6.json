@@ -1,0 +1,71 @@
+{
+  "day": 6,
+  "title": "拉格朗日乘子 + numpy vs PyTorch 梯度对比",
+  "sections": [
+    {
+      "h": "Phase 0 的最后一块数学：带约束的优化",
+      "md": "前面所有优化都是「自由下山」，但真实问题常有红线：RLHF 里「奖励最大，但 KL(π‖π_base) ≤ ε」；SVM 里「间隔最大，但所有样本必须分对」。**拉格朗日乘子法**是这类问题的基础语言：把约束折进目标，变成无约束问题再优化。\n\n今天的日程：上午看 3Blue1Brown 的拉格朗日直觉视频（只求直觉），下午做收官实验——用 PyTorch autograd 验证本周手写的 numpy 梯度，误差 < 1e-6 才算过关。"
+    },
+    {
+      "h": "拉格朗日乘子：约束变成目标的一部分",
+      "md": "问题形状：maximize f(x,y) s.t. g(x,y)=0。核心观察：最优点处 **f 的等高线与约束曲线相切**，法线方向平行。于是：\n\n```\n∇f = λ · ∇g          ← λ 就是拉格朗日乘子\n```\n\n定义拉格朗日函数 L(x,y,λ) = f(x,y) − λ·g(x,y)，对三个变量分别求偏导并置零，联立求解。\n\n直觉：把约束想成围栏，你只能沿围栏走。最优点处 f 沿围栏方向无分量，即 ∇f 与 ∇g 同向，大小之比就是 λ。\n\n**λ 的经济学含义**：影子价格——约束松一格，目标能改善多少。λ=0 说明约束不 binding（没顶到边界）。KL 惩罚的系数 β 正是这样一个 λ：调大 = 把策略往基座拉紧，调小 = 给奖励更多自由。\n\n| 概念 | 一句话 |\n|---|---|\n| KKT 条件 | 不等式约束的扩展（g≤0 + 互补松弛 μ·g=0） |\n| 对偶问题 | 换个视角求 λ，SVM 的对偶形式由此而来 |\n| 影子价格 | λ 的值 = 约束松一单位的边际收益 |\n\n> 现阶段只需看懂 ∇f = λ∇g 的几何，记住「约束优化 = 目标 + 乘子·约束」。推导细节等 SVM 周再回炉。"
+    },
+    {
+      "h": "autograd：自动微分的机制",
+      "md": "这周你手写过 softmax 交叉熵的梯度 `(p−y)`。PyTorch 的 autograd 做同样的事，但全自动：**前向记录计算图，反向沿图应用链式法则**。\n\n```python\nimport torch\n\nx = torch.tensor([2.0], requires_grad=True)\ny = x ** 3 + 2 * x\ny.backward()          # 反向传播：自动算 dy/dx\nx.grad                # tensor([14.])  ← 3x²+2 = 3·4+2 ✓\n```\n\n三个要点：\n\n1. **requires_grad=True** 声明「对它求导」，运算被录成动态图\n2. **.backward()** 从标量出发反传，梯度累积进 `.grad`（所以循环训练要 `optimizer.zero_grad()`）\n3. **链式法则的自动化**：每个算子自带局部梯度，反传时逐节点相乘——Day 7 要写清楚的正是这个机制\n\nautograd 与手写梯度是**校验**关系而非替代：会手推梯度才能定位框架 bug、读懂论文推导。"
+    },
+    {
+      "h": "动手：numpy 梯度 vs autograd 对拍",
+      "md": "「对拍」= 同一输入喂给两个实现比较输出，是验证手写梯度的标准工程手段。以昨天的 MLP 为例：\n\n```python\nimport numpy as np, torch\n\ntorch.manual_seed(0); np.random.seed(0)\n\n# PyTorch 参考实现\nxt = torch.randn(64, 784, requires_grad=True)\nW1t = torch.randn(784, 128, requires_grad=True)\na1 = torch.relu(xt @ W1t)\nz2 = a1 @ torch.randn(128, 10)\nloss = torch.nn.functional.cross_entropy(z2, torch.randint(0, 10, (64,)))\nloss.backward()\n\n# numpy 手写梯度（你的版本）\n# dL/dW1 = X.T @ ((p − Y) @ W2.T * (z1 > 0)) / batch\n\ndef check(mine, theirs, name):\n    err = np.abs(mine - theirs.detach().numpy()).max()\n    print(f'{name}: max err = {err:.2e}', '✓' if err < 1e-6 else '✗')\n```\n\n排错套路（按命中率排序）：\n\n1. **形状错** → 广播悄悄把 (64,10) 加到 (64,128) 上，检查每个中间量 shape\n2. **转置错** → `X.T @ G` 与 `G.T @ X` 结果形状可能都对但值不同，核对推导\n3. **忘了除以 batch** → loss 用了 mean 梯度就要 /64\n4. **ReLU 掩码错** → 用 `(z1 > 0)` 而不是 `(a1 > 0)`（碰巧等价，但别赌）\n\n误差 < 1e-6，Phase 0 数学闭环：**你写的不是作业，是与工业级框架同精度的梯度引擎。**"
+    },
+    {
+      "h": "Phase 0 收官清单",
+      "md": "明天是复盘输出日，今晚自查 Phase 0 六项能力：\n\n- 能默写熵/KL/互信息公式并说明各自的应用场景（损失、正则、特征选择）\n- 能说清 MLE→NLL→交叉熵的等价链条\n- 能手推 softmax+交叉熵的梯度 p−y\n- 能用 numpy 写出带 ReLU 隐藏层的 MLP 前向（形状全对）\n- 能解释 SGD/Momentum/Adam 各自解决什么问题\n- 能用 autograd 对拍验证手写梯度到 1e-6\n\n有任何一项卡壳，回对应那天补——Phase 1 里它们会变成不假思索的肌肉记忆。\n\n> GPT 训练 = 巨大 MLP + softmax 到 5 万维词表 + 交叉熵 + AdamW——本周所学原样放大。明天写 blog 讲清楚。"
+    }
+  ],
+  "keyPoints": [
+    "约束优化最优点处 ∇f = λ∇g（等高线与约束曲线相切），拉格朗日函数 L = f − λ·g",
+    "λ 是影子价格：约束放松一单位带来的目标改善；KL 惩罚系数 β 就是 RLHF 里的 λ",
+    "autograd 机制：前向记录计算图，backward 沿图反向链式法则；.grad 累积需 zero_grad()",
+    "对拍 = 手写 numpy 梯度与 autograd 同输入比对，max err < 1e-6 视为一致",
+    "梯度排错优先级：形状/广播 > 转置方向 > 除 batch > ReLU 掩码"
+  ],
+  "quiz": [
+    {
+      "q": "拉格朗日乘子法的几何直觉是：最优点处？",
+      "options": ["目标函数梯度为零", "目标等高线与约束曲线相切（∇f 与 ∇g 平行）", "约束函数梯度为零", "两者都取最大值"],
+      "answer": 1,
+      "explain": "若不相切，沿约束曲线还有 f 的切向分量，可以继续改进——只有相切（法向平行）才是驻点。"
+    },
+    {
+      "q": "某约束最优解处 λ=0，含义是？",
+      "options": ["推导出错", "该约束不 binding：没顶到边界，松紧它不影响目标", "目标函数为零", "乘子必须为正"],
+      "answer": 1,
+      "explain": "λ 度量约束的边际影响；λ=0 即互补松弛的情形——约束实际上没起作用。"
+    },
+    {
+      "q": "RLHF 中把 KL(π_new‖π_base) 惩罚系数 β 调大，效果是？",
+      "options": ["策略更自由地优化奖励", "策略被更紧地拴在基座附近", "学习率变大", "约束消失"],
+      "answer": 1,
+      "explain": "β 是该约束的乘子：调大即提高「跑偏」的价格，输出更接近基座、更安全但奖励提升受限。"
+    },
+    {
+      "q": "训练循环里每步调用 `optimizer.zero_grad()` 的原因是？",
+      "options": ["释放显存", "PyTorch 的 .grad 是累积式，不清零会混入上一步的梯度", "重置学习率", "重新构建计算图"],
+      "answer": 1,
+      "explain": "backward 把梯度累加进 .grad 张量；不清零则本次更新 = 历史梯度之和，训练立刻失控。"
+    },
+    {
+      "q": "手写 MLP 反向与 autograd 对拍，发现 max err ≈ 64 倍关系，最可能的原因是？",
+      "options": ["浮点误差", "一边 loss 用 sum、一边用 mean（忘了 /batch）", "学习率太大", "ReLU 用错了"],
+      "answer": 1,
+      "explain": "sum 与 mean 恰差 batch 倍数（此处 64）。差整数倍几乎总是归一化不一致，差形状才是转置问题。"
+    },
+    {
+      "q": "autograd 反向传播的数学核心是？",
+      "options": ["数值差分近似", "计算图上逐算子应用局部梯度并链式相乘", "遗传算法搜索", "查表"],
+      "answer": 1,
+      "explain": "每个算子登记局部导数，backward 从输出反传逐节点相乘——链式法则的自动化，也正是你明天 blog 的主题。"
+    }
+  ]
+}

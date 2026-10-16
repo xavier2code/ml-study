@@ -1,0 +1,1060 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ML 学习路线 · 22 周</title>
+<meta name="description" content="22 周 / 160 天机器学习·深度学习·大模型原理学习路线：每日内容 + 互动原理图 + 掌握测验，进度本地保存。" />
+<meta property="og:title" content="ML 学习路线 · 22 周" />
+<meta property="og:description" content="160 天从经典 ML 到 LLM/Agent 的完整学习路径，含互动原理图与每日测验。" />
+<meta property="og:type" content="website" />
+<link rel="icon" href="favicon.svg" type="image/svg+xml" />
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #161a22;
+    --panel-2: #1d2230;
+    --line: #2a3142;
+    --text: #e6e9ef;
+    --text-dim: #8d97aa;
+    --accent: #4c8dff;
+    --accent-2: #ffb454;
+    --high: #ff6464;
+    --med: #ffd24c;
+    --ok: #62d48f;
+    --hi-prio: #ff6464;
+    --med-prio: #ffd24c;
+    --code-bg: #0a0c10;
+    --code-fg: #c8d0db;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font: 14px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* ---------- header ---------- */
+  header {
+    position: sticky; top: 0; z-index: 50;
+    background: rgba(15, 17, 21, 0.92);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--line);
+    padding: 14px 24px;
+    display: flex; align-items: center; gap: 16px;
+  }
+  header h1 {
+    font-size: 18px; font-weight: 600; margin: 0;
+    letter-spacing: 0.2px;
+  }
+  header h1 .sub {
+    color: var(--text-dim); font-weight: 400; font-size: 13px; margin-left: 8px;
+  }
+  .progress-wrap {
+    flex: 1;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .progress-bar {
+    flex: 1; height: 6px; background: var(--panel-2);
+    border-radius: 3px; overflow: hidden; max-width: 320px;
+  }
+  .progress-fill {
+    height: 100%; background: linear-gradient(90deg, var(--accent), var(--ok));
+    width: 0%; transition: width 200ms ease;
+  }
+  .progress-text { color: var(--text-dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .stat {
+    color: var(--text-dim); font-size: 12px;
+    border-left: 1px solid var(--line); padding-left: 12px;
+  }
+  .stat strong { color: var(--text); font-weight: 600; }
+
+  /* ---------- layout ---------- */
+  main {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    min-height: calc(100vh - 60px);
+  }
+
+  /* ---------- sidebar (weeks) ---------- */
+  aside {
+    border-right: 1px solid var(--line);
+    background: var(--panel);
+    padding: 12px 0;
+    overflow-y: auto;
+    max-height: calc(100vh - 60px);
+    position: sticky; top: 60px;
+  }
+  .phase-block { margin-bottom: 4px; }
+  .phase-header {
+    padding: 10px 16px 6px;
+    color: var(--text-dim);
+    font-size: 11px; font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+  }
+  .phase-header .phase-name { color: var(--text); }
+  .week {
+    border-top: 1px dashed var(--line);
+  }
+  .week:first-child { border-top: none; }
+  .week-label {
+    padding: 8px 16px;
+    cursor: pointer;
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 13px;
+    user-select: none;
+  }
+  .week-label:hover { background: var(--panel-2); }
+  .week-label .week-days {
+    color: var(--text-dim); font-size: 11px;
+  }
+  .week-label .week-check {
+    width: 10px; height: 10px; border-radius: 50%;
+    border: 1px solid var(--line); flex: 0 0 10px;
+  }
+  .week-label .week-check.done { background: var(--ok); border-color: var(--ok); }
+  .week-label .week-check.partial { background: var(--med); border-color: var(--med); }
+  .week-days-list {
+    padding: 0 0 6px 0; display: none;
+  }
+  .week.open .week-days-list { display: block; }
+  .week.open .week-label .caret { transform: rotate(90deg); }
+  .caret {
+    transition: transform 120ms ease; color: var(--text-dim);
+    display: inline-block; width: 12px;
+  }
+  .day-link {
+    display: block;
+    padding: 6px 16px 6px 36px;
+    color: var(--text);
+    font-size: 13px;
+    border-left: 2px solid transparent;
+    cursor: pointer;
+  }
+  .day-link:hover { background: var(--panel-2); }
+  .day-link.active {
+    background: var(--panel-2);
+    border-left-color: var(--accent);
+  }
+  .day-link .day-num {
+    color: var(--text-dim); font-variant-numeric: tabular-nums;
+    font-size: 11px; margin-right: 8px; display: inline-block; min-width: 28px;
+  }
+  .day-link.done .day-num { color: var(--ok); }
+  .day-link.has-figure::after {
+    content: "◆"; color: var(--accent-2); margin-left: 6px; font-size: 10px;
+  }
+  .day-link.milestone .day-num { color: var(--hi-prio); font-weight: 600; }
+
+  /* ---------- main content ---------- */
+  .content {
+    padding: 24px 32px 80px;
+    max-width: 920px;
+  }
+  .day-card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 24px 28px;
+    margin-bottom: 24px;
+  }
+  .day-head {
+    display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+    margin-bottom: 8px;
+  }
+  .day-badge {
+    background: var(--panel-2);
+    color: var(--text-dim);
+    font-size: 11px; font-weight: 600;
+    padding: 3px 8px; border-radius: 4px;
+    font-variant-numeric: tabular-nums;
+  }
+  .day-title {
+    font-size: 20px; font-weight: 600; margin: 0;
+  }
+  .day-hours {
+    color: var(--accent-2); font-size: 13px;
+    font-weight: 600; margin-left: auto;
+  }
+  .day-summary {
+    color: var(--text-dim); margin: 8px 0 16px;
+  }
+  .day-figure {
+    margin: 20px 0 24px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #0a0c10;
+    padding: 16px;
+  }
+  .day-figure img { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+  .day-figure .fig-slot {
+    min-height: 200px;
+    display: flex; align-items: center; justify-content: center;
+    background:
+      linear-gradient(45deg, var(--code-bg) 25%, transparent 25%),
+      linear-gradient(-45deg, var(--code-bg) 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, var(--code-bg) 75%),
+      linear-gradient(-45deg, transparent 75%, var(--code-bg) 75%);
+    background-size: 16px 16px;
+    background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+    background-color: #0a0c10;
+    border-radius: 4px;
+  }
+  .day-figure .fig-placeholder { text-align: center; color: var(--text-dim); }
+  .day-figure .fig-icon { font-size: 32px; margin-bottom: 8px; color: var(--accent-2); }
+  .day-figure .fig-hint { font-size: 11px; margin-top: 6px; opacity: 0.7; }
+  .day-figure .fig-slot img { display: block; }
+  .day-figure .fig-slot iframe { width: 100%; height: 740px; border: 0; display: block; background: transparent; }
+  .day-figure .fig-caption {
+    color: var(--text-dim); font-size: 12px; margin-top: 8px; text-align: center;
+  }
+  .day-figure .fig-missing {
+    color: var(--text-dim); font-size: 13px; text-align: center;
+    padding: 32px 16px;
+  }
+  .day-figure .fig-missing code {
+    background: var(--code-bg); padding: 1px 6px; border-radius: 3px;
+    color: var(--accent-2);
+  }
+
+  .sub-task {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 8px 10px; margin: 4px 0;
+    background: var(--panel-2);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 120ms;
+  }
+  .sub-task:hover { background: #232a3a; }
+  .sub-task input[type="checkbox"] {
+    margin-top: 2px; flex: 0 0 auto;
+    accent-color: var(--ok);
+  }
+  .sub-task .sub-name { flex: 1; }
+  .sub-task .sub-hours {
+    color: var(--accent-2); font-size: 12px; font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .sub-task.done .sub-name { color: var(--text-dim); text-decoration: line-through; }
+
+  .ref-line {
+    color: var(--text-dim); font-size: 12px;
+    margin-top: 12px;
+  }
+
+  .milestone-card {
+    background: linear-gradient(135deg, #1f1424 0%, var(--panel) 100%);
+    border: 1px solid #4a2438;
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin-bottom: 16px;
+  }
+  .milestone-card .m-head {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
+  }
+  .milestone-card .m-tag {
+    background: var(--hi-prio);
+    color: #fff; font-size: 10px; font-weight: 700;
+    padding: 2px 7px; border-radius: 3px; letter-spacing: 0.5px;
+  }
+  .milestone-card .m-title { font-size: 16px; font-weight: 600; }
+  .milestone-card .m-day { color: var(--text-dim); font-size: 12px; margin-left: auto; }
+  .milestone-card .m-crit { color: var(--text-dim); margin: 8px 0 12px; }
+  .milestone-card .m-list { font-size: 13px; }
+  .milestone-card .m-list div { padding: 4px 0; }
+  .milestone-card .m-list .check {
+    color: var(--ok); margin-right: 8px; font-weight: 700;
+  }
+
+  /* ---------- empty / loading ---------- */
+  .empty {
+    text-align: center; color: var(--text-dim);
+    padding: 80px 20px;
+  }
+  .empty h2 { color: var(--text); font-weight: 600; }
+
+  /* ---------- responsive ---------- */
+  /* ============ study content + quiz ============ */
+  .study { margin-top: 26px; }
+  .study-head {
+    font-size: 15px; font-weight: 600; color: var(--accent);
+    margin-bottom: 14px; padding-bottom: 8px; border-bottom: 1px solid var(--line);
+  }
+  .study-loading, .study-missing {
+    color: var(--text-dim); font-size: 13px;
+    padding: 24px 16px; border: 1px dashed var(--line); border-radius: 10px;
+    text-align: center;
+  }
+  .study-sec { margin-bottom: 22px; }
+  .sec-h {
+    font-size: 14px; font-weight: 600; margin: 0 0 10px 0;
+    color: var(--text); display: flex; align-items: center; gap: 8px;
+  }
+  .sec-h::before { content: ""; width: 3px; height: 14px; background: var(--accent); border-radius: 2px; flex: 0 0 3px; }
+  .md-p { font-size: 13.5px; line-height: 1.75; margin: 8px 0; color: var(--text); }
+  .md-h2 { font-size: 14px; font-weight: 600; margin: 16px 0 6px; color: var(--accent-2); }
+  .md-h3 { font-size: 13px; font-weight: 600; margin: 14px 0 6px; color: var(--accent-2); }
+  .md-ul, .md-ol { margin: 8px 0 8px 20px; padding: 0; }
+  .md-ul li, .md-ol li { font-size: 13.5px; line-height: 1.7; margin: 4px 0; color: var(--text); }
+  .md-ul { list-style: disc; } .md-ol { list-style: decimal; }
+  .md-quote {
+    border-left: 3px solid var(--accent); background: var(--panel-2);
+    margin: 10px 0; padding: 8px 14px; border-radius: 0 8px 8px 0;
+    font-size: 13px; color: var(--text-dim); line-height: 1.7;
+  }
+  .md-ic {
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 4px; padding: 1px 5px; font-size: 12px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  .md-code {
+    background: #0d1117; color: #e6edf3; border: 1px solid var(--line);
+    border-radius: 8px; padding: 12px 14px; overflow-x: auto;
+    margin: 10px 0; font-size: 12.5px; line-height: 1.6;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  .md-table { border-collapse: collapse; margin: 10px 0; width: 100%; font-size: 13px; }
+  .md-table th, .md-table td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; }
+  .md-table th { background: var(--panel-2); color: var(--text-dim); font-weight: 600; }
+  .keypoints {
+    background: linear-gradient(135deg, rgba(255,184,0,.06), rgba(255,184,0,.02));
+    border: 1px solid rgba(255,184,0,.25); border-radius: 10px;
+    padding: 14px 18px; margin: 20px 0;
+  }
+  .kp-h { font-size: 13px; font-weight: 600; color: #ffb400; margin-bottom: 8px; }
+  .keypoints ul { margin: 0; padding-left: 20px; list-style: "·"; }
+  .keypoints li { font-size: 13px; line-height: 1.7; margin: 4px 0; }
+  .quiz {
+    border: 1px solid var(--line); border-radius: 12px;
+    background: var(--panel-2); padding: 16px 18px; margin: 20px 0;
+  }
+  .quiz-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 14px; font-weight: 600; margin-bottom: 4px;
+  }
+  .quiz-rule { font-size: 11.5px; color: var(--text-dim); font-weight: 400; }
+  .quiz-prev { margin-left: 10px; color: var(--ok); }
+  .quiz-q { padding: 12px 0; border-top: 1px solid var(--line); }
+  .qq { font-size: 13.5px; font-weight: 500; margin-bottom: 8px; line-height: 1.6; display: flex; gap: 8px; }
+  .qn {
+    flex: 0 0 20px; height: 20px; border-radius: 50%; background: var(--panel);
+    border: 1px solid var(--line); font-size: 11px; color: var(--text-dim);
+    display: inline-flex; align-items: center; justify-content: center; margin-top: 2px;
+  }
+  .quiz-q.correct .qn { background: var(--ok); border-color: var(--ok); color: #fff; }
+  .quiz-q.wrong .qn { background: var(--bad, #e5534b); border-color: var(--bad, #e5534b); color: #fff; }
+  .qo {
+    display: flex; gap: 8px; align-items: flex-start;
+    padding: 7px 10px; margin: 4px 0; border-radius: 8px;
+    border: 1px solid transparent; cursor: pointer; font-size: 13px; line-height: 1.6;
+  }
+  .qo:hover { background: var(--panel); }
+  .qo input { margin-top: 3px; }
+  .quiz-q.correct .qo.is-answer { border-color: var(--ok); background: rgba(63,185,80,.08); }
+  .quiz-q.wrong .qo.is-answer { border-color: var(--ok); background: rgba(63,185,80,.08); }
+  .quiz-q.wrong .qo.is-wrong { border-color: var(--bad, #e5534b); background: rgba(229,83,75,.08); }
+  .q-explain {
+    display: none; margin-top: 8px; padding: 10px 12px;
+    background: var(--panel); border-radius: 8px;
+    font-size: 12.5px; color: var(--text-dim); line-height: 1.7;
+  }
+  .quiz-warn { display: none; color: var(--bad, #e5534b); font-size: 12.5px; margin-top: 8px; }
+  .quiz-result {
+    display: none; justify-content: space-between; align-items: center;
+    margin-top: 14px; padding: 12px 14px; border-radius: 8px; font-size: 14px; font-weight: 600;
+  }
+  .quiz-result.pass { display: flex; background: rgba(63,185,80,.1); border: 1px solid var(--ok); color: var(--ok); }
+  .quiz-result.fail { display: flex; background: rgba(229,83,75,.08); border: 1px solid var(--bad, #e5534b); color: var(--bad, #e5534b); }
+  .quiz-actions { margin-top: 14px; display: flex; gap: 10px; }
+  .quiz-submit, .quiz-retry {
+    background: var(--accent); color: #fff; border: 0; border-radius: 8px;
+    padding: 9px 22px; font-size: 13.5px; font-weight: 600; cursor: pointer;
+  }
+  .quiz-retry { background: var(--panel); color: var(--text); border: 1px solid var(--line); }
+  .mastery-badge {
+    display: inline-block; background: rgba(63,185,80,.12); color: var(--ok);
+    border: 1px solid var(--ok); border-radius: 20px;
+    font-size: 11px; font-weight: 600; padding: 3px 10px; margin-left: 10px;
+  }
+  .day-link .ml-mark { color: var(--ok); font-size: 11px; margin-left: 6px; }
+
+  /* ============ 导出/导入 ============ */
+  .io-btns { display: flex; gap: 6px; margin-left: auto; }
+  .io-btn {
+    background: var(--panel-2); color: var(--text-dim);
+    border: 1px solid var(--line); border-radius: 7px;
+    padding: 5px 10px; font-size: 11.5px; cursor: pointer;
+    white-space: nowrap;
+  }
+  .io-btn:hover { color: var(--text); border-color: var(--accent); }
+
+  @media (max-width: 800px) {
+    main { grid-template-columns: 1fr; }
+    aside { position: relative; max-height: none; top: 0; }
+    .content { padding: 16px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>ML 学习路线 <span class="sub">22 周 · 6 Phase</span></h1>
+  <div class="progress-wrap">
+    <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+    <div class="progress-text" id="progressText">0 / 160</div>
+  </div>
+  <div class="stat"><strong id="hoursTotal">0h</strong> 已学</div>
+  <div class="stat"><strong id="streakStat">0</strong> 连击</div>
+  <div class="stat"><strong id="masterStat">0/160</strong> 掌握</div>
+  <div class="io-btns">
+    <button class="io-btn" id="btnExport" title="把学习进度和测验成绩导出为 JSON 文件备份">⬇︎ 导出进度</button>
+    <button class="io-btn" id="btnImport" title="从之前导出的 JSON 文件恢复进度">⬆︎ 导入进度</button>
+    <input type="file" id="importFile" accept="application/json,.json" style="display:none" />
+  </div>
+</header>
+
+<main>
+  <aside id="sidebar"></aside>
+  <div class="content" id="content">
+    <div class="empty">
+      <h2>选一天开始学习</h2>
+      <p>从左侧选一天，或直接打开 <strong>Day 1</strong>。</p>
+    </div>
+  </div>
+</main>
+
+<script>
+// ============== data ==============
+let DAYS = [];
+let CHECKLIST = {};   // { "1-2": true, "1-3": true, ... }   sub task by day-task
+let MILESTONES = [
+  { day: 7,   phase: "Phase 0", title: "数学速通 + Python 工具栈",
+    crit: "numpy 梯度对比 PyTorch 误差 < 1e-6 + 梯度 blog 发布。",
+    checks: [
+      "numpy 实现 softmax + cross-entropy + MLP 前向",
+      "numpy 手写反向传播，PyTorch 验证误差 < 1e-6",
+      "掌握 SGD / Momentum / Adam 公式与直觉",
+      "pandas DataFrame 基础操作熟练（groupby/merge）",
+      "发布一篇《梯度是什么》的 blog（含链式法则矩阵版图解）",
+    ] },
+  { day: 35,  phase: "Phase 1", title: "经典机器学习",
+    crit: "Kaggle Titanic 公开榜 top 30%。",
+    checks: [
+      "手写 LR / 逻辑回归 / Softmax + CrossEntropy（无 sklearn）",
+      "sklearn 训完 Titanic 并对比 LR / RF / XGBoost 分数",
+      "理解偏差-方差 + L1/L2 正则化 + 集成方法",
+      "完整跑通 PCA / SVM / K-Means / NB 理论 + 代码",
+      "Kaggle Titanic 公开榜截图：top 30% 分数",
+    ] },
+  { day: 70,  phase: "Phase 2", title: "深度学习基础",
+    crit: "ResNet-20 on CIFAR-10 ≥ 88% + 手写 mini-Transformer 跑通。",
+    checks: [
+      "纯 numpy 手写 2 层 MLP 反向传播，PyTorch 验证 < 1e-6",
+      "PyTorch 训 ResNet-20 on CIFAR-10 ≥ 88% 准确率",
+      "掌握 SGD / Adam / AdamW / 学习率调度 / 初始化",
+      "理解 CNN / RNN / LSTM / Seq2Seq / Attention 演进",
+      "手写 mini-Transformer（6 层 encoder）在文本分类上跑通",
+    ] },
+  { day: 98,  phase: "Phase 3", title: "Transformer + 预训练",
+    crit: "mini-GPT 在 TinyStories loss 平稳下降 + 生成连贯。",
+    checks: [
+      "用 PyTorch 从零实现 nanoGPT（≤ 500 行）",
+      "掌握 Attention / Multi-Head / RoPE / Flash Attention",
+      "实现 RMSNorm + SwiGLU + GQA（现代 LLM Block）",
+      "手写 BPE tokenizer（不调包），与 tiktoken 验证一致",
+      "mini-GPT 50M 在 TinyStories 上 loss 平稳下降 + 50 个生成样本人工评分 OK",
+    ] },
+  { day: 133, phase: "Phase 4", title: "LLM 深入",
+    crit: "mini-LLaMA 130M 预训练 + DPO + vLLM 部署 + 量化。",
+    checks: [
+      "用 PyTorch 实现 mini-LLaMA 130M（含 RMSNorm / RoPE / SwiGLU / GQA）",
+      "mini-LLaMA 130M 在 TinyStories 上预训练完成",
+      "用 TRL 完成 SFT + DPO，附 loss 曲线 + 生成样例",
+      "vLLM 部署 + benchmark（KV cache 显存 vs 吞吐量）",
+      "用 llama.cpp 量化（GGUF / AWQ）部署自己的模型",
+    ] },
+  { day: 160, phase: "Phase 5", title: "工程 + Agent + 多模态",
+    crit: "端到端可上线项目跑通（Agent / RAG / 多模态 三选一）。",
+    checks: [
+      "搭建能跑通 100 万文档的 RAG 服务（Qdrant + BGE + Rerank）",
+      "实现 Multi-Agent 编排（LangGraph），含 5+ 工具调用 + 观测",
+      "部署视频理解（Qwen2.5-VL）+ 语音转写（Whisper / Paraformer）",
+      "接入 Langfuse / Arize Phoenix 可观测",
+      "完整 demo 视频（10 分钟）+ 部署文档 + 简历可写项目",
+    ] },
+];
+
+// figures metadata: { day: { src, caption } }
+const FIGURES = {
+  // Phase 0 — gradient descent as a test rig
+  4: { src: "figures/grad-descent/grad-descent.html", caption: "梯度下降的物理比喻：钢球=参数 θ，滑道=loss 曲面，弹簧=学习率压力，刻度盘=当前 loss。悬停可滑动小球，观察 loss 随 θ 下降。" },
+  // Phase 1 — bias-variance
+  11: { src: "figures/bias-variance/bias-variance.html", caption: "偏差-方差 trade-off：天平左盘=偏差(欠拟合)，右盘=方差(过拟合)，底座旋钮=模型复杂度——旋钮越大左盘越轻右盘越重，塔上表盘的指针划出 U 形总误差曲线，刻度尺上标出了最优点。悬停或方向键调节复杂度。" },
+  // Phase 2 — backprop as a chain of gears
+  37: { src: "figures/backprop-gears/backprop-gears.html", caption: "反向传播的物理比喻：四级啮合齿轮组，最右端的大齿轮带摇柄=误差信号 δ，反向驱动整条齿轮链。相邻齿轮反向旋转(梯度符号)，齿数比=局部雅可比(×1.30/×1.31/×1.29)，亮色指针线=各层梯度方向，读数栏=链式法则逐层衰减的 |g|。悬停转动摇柄。" },
+  // Phase 2 — CNN convolution
+  52: { src: "figures/cnn-sliding/cnn-sliding.html", caption: "CNN 卷积运算：蚀刻网格=输入特征图(中间亮列=边缘模式)，龙门架上的 3×3 冲头=卷积核，沿轨道滑动每停一格(步长 stride=1)，前缘输出条上对应数值灯亮起(Σ=9 格覆盖值归一化)。悬停或方向键滑动冲头。" },
+  // Phase 3 — self-attention
+  71: { src: "figures/self-attention/self-attention.html", caption: "Self-Attention：轨道上 7 个令牌块=序列 tokens，顶部滑车=Query，从滑车垂下的吊索连向每个 token——吊索粗细/亮度=softmax 注意力权重(离 Query 越近权重越高)，滑车上的小表=最大权重值。悬停移动 Query 观察权重重新分布。" },
+  // Phase 4 — KV cache vs PagedAttention
+  113: { src: "figures/paged-attention/paged-attention.html", caption: "PagedAttention：同一份 KV cache 数据的两种存法——左托盘=连续预留(参差不齐+深色碎片空隙，浪费 34%)，右托盘=分页池(整齐等高页，浪费仅 2%)，中央表盘指针=显存浪费率，前缘手柄=调度模式切换。点击或方向键拨动手柄对比。" },
+  // Phase 5 — Agent ReAct loop
+  141: { src: "figures/react-loop/react-loop.html", caption: "ReAct Agent 循环：分度转台三等分——Thought / Action / Observation，固定探针压在当前扇区=当前执行步，棘爪每步咔哒一次，侧面计数轮=完成的完整循环数(模 10)。点击或 → 键推进一个阶段。" },
+};
+
+const STORAGE_KEY = "ml-study-v1";
+const QUIZ_KEY = "ml-quiz-v1";
+
+// ============== state ==============
+let CURRENT_DAY = 1;
+let QUIZ = {};
+
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const o = JSON.parse(raw);
+      CHECKLIST = o.checklist || {};
+      CURRENT_DAY = o.lastDay || 1;
+    }
+  } catch (e) { console.warn("state load failed", e); }
+  try { QUIZ = JSON.parse(localStorage.getItem(QUIZ_KEY) || "{}") || {}; } catch (e) { QUIZ = {}; }
+}
+function saveState() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ checklist: CHECKLIST, lastDay: CURRENT_DAY }));
+  } catch (e) { console.warn("state save failed", e); }
+}
+function saveQuiz() {
+  try { localStorage.setItem(QUIZ_KEY, JSON.stringify(QUIZ)); } catch (e) { console.warn("quiz save failed", e); }
+}
+function isMastered(d) { const q = QUIZ[d]; return !!q && q.total > 0 && q.best / q.total >= 0.8; }
+function updateMastery() {
+  const n = DAYS.filter(x => isMastered(x.day)).length;
+  document.getElementById("masterStat").textContent = n + "/" + DAYS.length;
+}
+
+// ============== helpers ==============
+function pad2(n) { return n < 10 ? "0" + n : "" + n; }
+function key(day, idx) { return day + "-" + idx; }
+function isTaskDone(day, idx) { return !!CHECKLIST[key(day, idx)]; }
+function setTaskDone(day, idx, v) { if (v) CHECKLIST[key(day, idx)] = 1; else delete CHECKLIST[key(day, idx)]; }
+function isDayDone(day) {
+  const d = DAYS.find(x => x.day === day);
+  if (!d) return false;
+  return d.subs.length > 0 && d.subs.every((_, i) => isTaskDone(day, i));
+}
+function dayProgress(day) {
+  const d = DAYS.find(x => x.day === day);
+  if (!d) return 0;
+  if (d.subs.length === 0) return 0;
+  const done = d.subs.filter((_, i) => isTaskDone(day, i)).length;
+  return done / d.subs.length;
+}
+function weekProgress(days) {
+  let total = 0, done = 0;
+  for (const day of days) {
+    const d = DAYS.find(x => x.day === day);
+    if (!d) continue;
+    total += d.subs.length;
+    done += d.subs.filter((_, i) => isTaskDone(day, i)).length;
+  }
+  return total === 0 ? 0 : done / total;
+}
+
+// ============== sidebar ==============
+function buildSidebar() {
+  const aside = document.getElementById("sidebar");
+  // Group days by phase and week
+  // The python script exports data; here we replicate grouping by day ranges
+  // We re-import PHASES from python via embedded map for grouping
+  const PHASE_RANGES = [
+    { name: "Phase 0 — 数学与 Python 工具栈 (1 周)", start: 1,   end: 7   },
+    { name: "Phase 1 — 经典机器学习 (4 周)",         start: 8,   end: 35  },
+    { name: "Phase 2 — 深度学习基础 (5 周)",         start: 36,  end: 70  },
+    { name: "Phase 3 — Transformer + 预训练 (4 周)", start: 71,  end: 98  },
+    { name: "Phase 4 — LLM 深入 (5 周)",             start: 99,  end: 133 },
+    { name: "Phase 5 — 工程 + Agent + 多模态 (3.86 周)", start: 134, end: 160 },
+  ];
+  // Week boundaries (Mon..Sun, Day 1 = Fri 2026-10-16)
+  // Day 1 (Fri) -> start of week 1
+  // We use 7-day weeks with carry-over
+  // Manually assign Day ranges to weeks using offsets from start
+  function weekForDay(d) {
+    // Day 1..7 = Week 1, 8..14 = Week 2, etc.
+    return Math.ceil(d / 7);
+  }
+  const html = [];
+  for (const phase of PHASE_RANGES) {
+    html.push(`<div class="phase-block">`);
+    html.push(`<div class="phase-header"><span class="phase-name">${phase.name}</span></div>`);
+    const weekNumbers = new Set();
+    for (let d = phase.start; d <= phase.end; d++) {
+      weekNumbers.add(weekForDay(d));
+    }
+    for (const wn of [...weekNumbers].sort((a,b)=>a-b)) {
+      const daysInWeek = [];
+      for (let d = phase.start; d <= phase.end; d++) {
+        if (weekForDay(d) === wn) daysInWeek.push(d);
+      }
+      const wp = weekProgress(daysInWeek);
+      let dotClass = "";
+      if (wp === 1) dotClass = "done";
+      else if (wp > 0) dotClass = "partial";
+      const open = daysInWeek.includes(CURRENT_DAY) ? " open" : "";
+      const dayList = daysInWeek.map(d => {
+        const item = DAYS.find(x => x.day === d);
+        if (!item) return "";
+        const isMile = MILESTONES.some(m => m.day === d);
+        const isCurr = d === CURRENT_DAY ? " active" : "";
+        const done = isDayDone(d) ? " done" : "";
+        const hasFig = FIGURES[d] ? " has-figure" : "";
+        const mile = isMile ? " milestone" : "";
+        const mk = isMastered(d) ? '<span class="ml-mark">✓</span>' : "";
+        const title = item.title.length > 16 ? item.title.slice(0, 16) + "…" : item.title;
+        return `<a class="day-link${isCurr}${done}${hasFig}${mile}" data-day="${d}" title="${escapeHtml(item.title)}">
+          <span class="day-num">D${d}</span>${title}${mk}
+        </a>`;
+      }).join("");
+      html.push(`<div class="week${open}" data-week="${wn}">
+        <div class="week-label">
+          <span><span class="caret">▶</span> Week ${wn} <span class="week-days">(${daysInWeek.length} 天)</span></span>
+          <span class="week-check ${dotClass}"></span>
+        </div>
+        <div class="week-days-list">${dayList}</div>
+      </div>`);
+    }
+    html.push(`</div>`);
+  }
+  aside.innerHTML = html.join("");
+  // bind events
+  aside.querySelectorAll(".week-label").forEach(el => {
+    el.addEventListener("click", e => {
+      e.currentTarget.parentElement.classList.toggle("open");
+    });
+  });
+  aside.querySelectorAll(".day-link").forEach(el => {
+    el.addEventListener("click", e => {
+      e.preventDefault();
+      const d = +el.dataset.day;
+      showDay(d);
+    });
+  });
+}
+
+// ============== content ==============
+function showDay(d) {
+  CURRENT_DAY = d;
+  saveState();
+  history.replaceState(null, "", "#day-" + d);
+  // refresh sidebar (active class)
+  document.querySelectorAll(".day-link").forEach(el => {
+    el.classList.toggle("active", +el.dataset.day === d);
+  });
+  // open the parent week if collapsed
+  const link = document.querySelector(`.day-link[data-day="${d}"]`);
+  if (link) {
+    const week = link.closest(".week");
+    if (week && !week.classList.contains("open")) week.classList.add("open");
+    link.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+  const day = DAYS.find(x => x.day === d);
+  if (!day) return;
+  const isMile = MILESTONES.find(m => m.day === d);
+  const fig = FIGURES[d];
+  const content = document.getElementById("content");
+  const subsHtml = day.subs.map((s, i) => {
+    const done = isTaskDone(d, i) ? " done" : "";
+    return `<label class="sub-task${done}">
+      <input type="checkbox" data-day="${d}" data-idx="${i}" ${isTaskDone(d,i)?"checked":""} />
+      <span class="sub-name">${escapeHtml(s.name)}</span>
+      <span class="sub-hours">${s.hours}</span>
+    </label>`;
+  }).join("");
+  let figHtml = "";
+  if (fig) {
+    figHtml = `<div class="day-figure">
+      <div class="fig-slot" data-src="${fig.src}">
+        <div class="fig-placeholder">
+          <div class="fig-icon">▣</div>
+          <div>原理图 <code>${fig.src}</code></div>
+          <div class="fig-hint">运行 anatomy skill 生成后这里会显示图像</div>
+        </div>
+      </div>
+      <div class="fig-caption">${escapeHtml(fig.caption)}</div>
+    </div>`;
+  }
+  const mileHtml = isMile ? renderMilestone(isMile) : "";
+  content.innerHTML = `
+    <div class="day-card">
+      <div class="day-head">
+        <span class="day-badge">Day ${d} / 160</span>
+        <h2 class="day-title">${escapeHtml(day.title)}</h2>
+        <span class="day-hours">${day.hours}h</span>
+        <span class="mastery-badge" style="display:${isMastered(d) ? "inline-block" : "none"}">✓ 已掌握</span>
+      </div>
+      <div class="day-summary">${escapeHtml(day.summary)}</div>
+      ${figHtml}
+      <div>${subsHtml}</div>
+      <div class="study" id="study"></div>
+      <div class="ref-line">参考：<a href="docs/ML学习调研分析.md" target="_blank">学习诊断与规划</a> · <a href="https://reminders.apple.com" target="_blank">Apple Reminders</a> · 进度保存在浏览器 localStorage（换设备前先导出）</div>
+    </div>
+    ${mileHtml}
+  `;
+  // try to load figure; if exists, replace placeholder
+  content.querySelectorAll(".fig-slot").forEach(slot => {
+    const src = slot.dataset.src;
+    if (src.endsWith(".html")) {
+      // interactive anatomy figure: embed live (self-contained single file)
+      const frame = document.createElement("iframe");
+      frame.src = src;
+      frame.title = "anatomy 交互原理图";
+      frame.loading = "lazy";
+      slot.innerHTML = "";
+      slot.appendChild(frame);
+      return;
+    }
+    const img = new Image();
+    img.onload = () => {
+      img.className = "fig-img";
+      slot.innerHTML = "";
+      slot.appendChild(img);
+    };
+    img.onerror = () => { /* keep placeholder */ };
+    img.src = src;
+  });
+
+  // bind checkboxes
+  content.querySelectorAll(".sub-task input[type=checkbox]").forEach(cb => {
+    cb.addEventListener("change", e => {
+      const day = +e.target.dataset.day;
+      const idx = +e.target.dataset.idx;
+      setTaskDone(day, idx, e.target.checked);
+      saveState();
+      e.target.parentElement.classList.toggle("done", e.target.checked);
+      updateProgress();
+      buildSidebar(); // re-render week dots
+    });
+  });
+  loadContent(d);
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+// ============== study content + quiz ==============
+const CONTENT = new Map();
+
+async function loadContent(d) {
+  const box = document.getElementById("study");
+  if (!box) return;
+  if (CONTENT.has(d)) { renderStudy(d, CONTENT.get(d)); return; }
+  box.innerHTML = '<div class="study-loading">⏳ 加载学习内容…</div>';
+  try {
+    const res = await fetch(`content/days/d${d}.json`);
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const c = await res.json();
+    CONTENT.set(d, c);
+    if (CURRENT_DAY === d) renderStudy(d, c);
+  } catch (e) {
+    box.innerHTML = `<div class="study-missing">📖 本日学习内容尚未生成（后台 worker 正在分批生成，稍后刷新重试）。<br><code>content/days/d${d}.json</code></div>`;
+  }
+}
+
+function mdInline(s) {
+  s = escapeHtml(s);
+  s = s.replace(/`([^`]+)`/g, '<code class="md-ic">$1</code>');
+  s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  return s;
+}
+
+function mdTable(rows) {
+  const cells = rows.map(r => r.replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|").map(c => c.trim()));
+  const head = cells[0];
+  const bodyStart = cells[1] && cells[1].every(c => /^:?-{2,}:?$/.test(c)) ? 2 : 1;
+  const body = cells.slice(bodyStart);
+  return `<table class="md-table"><thead><tr>${head.map(h => `<th>${mdInline(h)}</th>`).join("")}</tr></thead><tbody>${body.map(r => `<tr>${r.map(c => `<td>${mdInline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+}
+
+function renderMd(md) {
+  const fences = [];
+  md = md.replace(/```[a-zA-Z]*\n([\s\S]*?)```/g, (m, code) => {
+    fences.push('<pre class="md-code"><code>' + escapeHtml(code.replace(/\n$/, "")) + "</code></pre>");
+    return "\u0001" + (fences.length - 1) + "\u0001";
+  });
+  const lines = md.split("\n");
+  let html = "", ul = false, ol = false, quote = false, tbl = [];
+  const closeLists = () => {
+    if (ul) { html += "</ul>"; ul = false; }
+    if (ol) { html += "</ol>"; ol = false; }
+    if (quote) { html += "</blockquote>"; quote = false; }
+  };
+  const closeTable = () => { if (tbl.length) { html += mdTable(tbl); tbl = []; } };
+  for (const line of lines) {
+    if (/^\s*\|.*\|\s*$/.test(line)) { closeLists(); tbl.push(line); continue; }
+    closeTable();
+    let m;
+    if ((m = line.match(/^(#{1,4})\s+(.*)$/))) {
+      closeLists();
+      const lvl = Math.min(m[1].length, 3);
+      html += `<div class="md-h${lvl}">${mdInline(m[2])}</div>`;
+    } else if (/^\s*[-*]\s+/.test(line)) {
+      if (ol) { html += "</ol>"; ol = false; }
+      if (quote) { html += "</blockquote>"; quote = false; }
+      if (!ul) { html += '<ul class="md-ul">'; ul = true; }
+      html += `<li>${mdInline(line.replace(/^\s*[-*]\s+/, ""))}</li>`;
+    } else if (/^\s*\d+\.\s+/.test(line)) {
+      if (ul) { html += "</ul>"; ul = false; }
+      if (quote) { html += "</blockquote>"; quote = false; }
+      if (!ol) { html += '<ol class="md-ol">'; ol = true; }
+      html += `<li>${mdInline(line.replace(/^\s*\d+\.\s+/, ""))}</li>`;
+    } else if (/^>\s?/.test(line)) {
+      closeLists();
+      if (!quote) { html += '<blockquote class="md-quote">'; quote = true; }
+      html += mdInline(line.replace(/^>\s?/, "")) + "<br>";
+    } else if (/^\u0001\d+\u0001$/.test(line.trim())) {
+      closeLists();
+      html += fences[+line.trim().slice(1, -1)];
+    } else if (/^\s*$/.test(line)) {
+      closeLists();
+    } else {
+      closeLists();
+      html += `<p class="md-p">${mdInline(line)}</p>`;
+    }
+  }
+  closeLists(); closeTable();
+  return html;
+}
+
+function renderStudy(d, c) {
+  const box = document.getElementById("study");
+  if (!box) return;
+  const secs = (c.sections || []).map(s => `
+    <section class="study-sec">
+      <h3 class="sec-h">${escapeHtml(s.h)}</h3>
+      ${renderMd(s.md || "")}
+    </section>`).join("");
+  const kps = (c.keyPoints || []).map(k => `<li>${mdInline(k)}</li>`).join("");
+  const quizHtml = (c.quiz || []).map((q, i) => `
+    <div class="quiz-q" data-qi="${i}">
+      <div class="qq"><span class="qn">${i + 1}</span><span>${escapeHtml(q.q)}</span></div>
+      ${q.options.map((o, j) => `<label class="qo"><input type="radio" name="q${i}" value="${j}"><span>${mdInline(o)}</span></label>`).join("")}
+      <div class="q-explain">💡 ${escapeHtml(q.explain || "")}</div>
+    </div>`).join("");
+  const q = QUIZ[d];
+  const prevBest = q ? ` · 历史最佳 ${q.best}/${q.total}${isMastered(d) ? " ✓" : ""}` : "";
+  box.innerHTML = `
+    <div class="study-head">📘 学习内容</div>
+    ${secs}
+    <div class="keypoints"><div class="kp-h">🎯 要点回顾</div><ul>${kps}</ul></div>
+    <div class="quiz" id="quiz">
+      <div class="quiz-head"><span>📝 小测验 · 是否掌握？</span><span class="quiz-rule">≥ 80% 视为掌握${prevBest}</span></div>
+      ${quizHtml}
+      <div class="quiz-warn"></div>
+      <div class="quiz-result"></div>
+      <div class="quiz-actions">
+        <button class="quiz-submit">提交答案</button>
+        <button class="quiz-retry" style="display:none">重做测验</button>
+      </div>
+    </div>`;
+  bindQuiz(d, c.quiz || []);
+}
+
+function bindQuiz(day, quiz) {
+  const box = document.getElementById("quiz");
+  if (!box || !quiz.length) return;
+  const submit = box.querySelector(".quiz-submit");
+  const retry = box.querySelector(".quiz-retry");
+  submit.addEventListener("click", () => {
+    const answers = quiz.map((_, i) => {
+      const sel = box.querySelector(`input[name="q${i}"]:checked`);
+      return sel ? +sel.value : -1;
+    });
+    const unanswered = answers.filter(a => a < 0).length;
+    const warn = box.querySelector(".quiz-warn");
+    if (unanswered > 0) {
+      warn.textContent = `还有 ${unanswered} 题未作答，全部作答后才能提交`;
+      warn.style.display = "block";
+      return;
+    }
+    warn.style.display = "none";
+    let score = 0;
+    quiz.forEach((q, i) => {
+      const wrap = box.querySelector(`.quiz-q[data-qi="${i}"]`);
+      const ok = answers[i] === q.answer;
+      if (ok) score++;
+      wrap.classList.add(ok ? "correct" : "wrong");
+      wrap.querySelectorAll(".qo").forEach((lab, j) => {
+        if (j === q.answer) lab.classList.add("is-answer");
+        else if (j === answers[i]) lab.classList.add("is-wrong");
+      });
+      const ex = wrap.querySelector(".q-explain");
+      if (ex) ex.style.display = "block";
+    });
+    const pct = Math.round(score / quiz.length * 100);
+    const passed = pct >= 80;
+    const prev = QUIZ[day] || { best: 0, total: quiz.length };
+    const wasMastered = isMastered(day);
+    if (!prev || score > (prev.best || 0) || prev.total !== quiz.length) {
+      QUIZ[day] = { best: Math.max(score, prev.best || 0), total: quiz.length };
+      saveQuiz();
+    }
+    const res = box.querySelector(".quiz-result");
+    res.className = "quiz-result " + (passed ? "pass" : "fail");
+    res.innerHTML = `<span>得分 ${score}/${quiz.length}（${pct}%）</span>` +
+      (passed ? '<span class="res-tag">已掌握 ✓</span>' : '<span class="res-tag">未达 80%，复习要点后重试</span>');
+    submit.style.display = "none";
+    retry.style.display = "inline-block";
+    if (passed && !wasMastered) {
+      const badge = document.querySelector(".day-head .mastery-badge");
+      if (badge) badge.style.display = "inline-block";
+      buildSidebar();
+      updateMastery();
+    }
+    res.scrollIntoView({ block: "center", behavior: "smooth" });
+  });
+  retry.addEventListener("click", () => {
+    if (CONTENT.has(day)) renderStudy(day, CONTENT.get(day));
+  });
+}
+
+function renderMilestone(m) {
+  const checks = m.checks.map(c => `<div><span class="check">✓</span>${escapeHtml(c)}</div>`).join("");
+  return `<div class="milestone-card">
+    <div class="m-head">
+      <span class="m-tag">验收</span>
+      <span class="m-title">${escapeHtml(m.phase)} 完成 → ${escapeHtml(m.title)}</span>
+      <span class="m-day">Day ${m.day} / 160</span>
+    </div>
+    <div class="m-crit">${escapeHtml(m.crit)}</div>
+    <div class="m-list">${checks}</div>
+  </div>`;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
+
+// ============== progress ==============
+function updateProgress() {
+  let total = 0, done = 0, hours = 0;
+  let daysDone = 0;
+  for (const d of DAYS) {
+    total += d.subs.length;
+    let allSub = true;
+    for (let i = 0; i < d.subs.length; i++) {
+      if (isTaskDone(d.day, i)) {
+        done++;
+        const h = parseFloat((d.subs[i].hours || "0").replace("h", ""));
+        if (!isNaN(h)) hours += h;
+      } else {
+        allSub = false;
+      }
+    }
+    if (d.subs.length > 0 && allSub) daysDone++;
+  }
+  const pct = total === 0 ? 0 : (done / total) * 100;
+  const totalDays = DAYS.length;
+  document.getElementById("progressFill").style.width = pct + "%";
+  document.getElementById("progressText").textContent = `${daysDone} / ${totalDays} 天`;
+  document.getElementById("hoursTotal").textContent = hours.toFixed(1) + "h";
+  // streak = consecutive done days from Day 1
+  let streak = 0;
+  for (const d of DAYS) {
+    if (isDayDone(d.day)) streak++;
+    else break;
+  }
+  document.getElementById("streakStat").textContent = streak;
+  updateMastery();
+}
+
+// ============== 进度导出 / 导入 ==============
+function exportProgress() {
+  const data = {
+    app: "ml-study-site",
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    state: JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}"),
+    quiz: JSON.parse(localStorage.getItem(QUIZ_KEY) || "{}"),
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  a.href = url;
+  a.download = `ml-progress-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function importProgress(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const data = JSON.parse(reader.result);
+      if (data.app !== "ml-study-site" || typeof data.state !== "object" || typeof data.quiz !== "object") {
+        throw new Error("格式不对");
+      }
+      const tasks = data.state.checklist ? Object.keys(data.state.checklist).length : 0;
+      const quizzes = Object.keys(data.quiz).length;
+      if (!confirm(`导入 ${tasks} 天的任务勾选、${quizzes} 天的测验成绩？\n（将覆盖当前进度）`)) return;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data.state));
+      localStorage.setItem(QUIZ_KEY, JSON.stringify(data.quiz));
+      location.reload();
+    } catch (e) {
+      alert("导入失败：不是有效的进度备份文件（" + e.message + "）");
+    }
+  };
+  reader.readAsText(file);
+}
+
+function bindIoButtons() {
+  const btnE = document.getElementById("btnExport");
+  const btnI = document.getElementById("btnImport");
+  const fileInput = document.getElementById("importFile");
+  if (!btnE || !btnI) return;
+  btnE.addEventListener("click", exportProgress);
+  btnI.addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", () => {
+    if (fileInput.files && fileInput.files[0]) {
+      importProgress(fileInput.files[0]);
+      fileInput.value = "";
+    }
+  });
+}
+
+// ============== init ==============
+async function init() {
+  loadState();
+  bindIoButtons();
+  try {
+    const res = await fetch("days.json");
+    DAYS = await res.json();
+  } catch (e) {
+    document.getElementById("content").innerHTML = `<div class="empty"><h2>加载失败</h2><p>无法读取 <code>days.json</code>。请确认通过 http(s):// 访问（不要用 file:// 双击打开），且站点文件完整。</p></div>`;
+    return;
+  }
+  buildSidebar();
+  updateProgress();
+  const hashDay = location.hash.match(/^#day-(\d+)$/);
+  showDay(hashDay ? Math.min(160, Math.max(1, +hashDay[1])) : CURRENT_DAY);
+}
+
+// hash 变化（浏览器后退/前进、外部链接）时同步切换 day
+window.addEventListener("hashchange", () => {
+  const m = location.hash.match(/^#day-(\d+)$/);
+  if (m) showDay(Math.min(160, Math.max(1, +m[1])));
+});
+
+init();
+</script>
+</body>
+</html>

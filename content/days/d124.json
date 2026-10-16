@@ -1,0 +1,102 @@
+{
+  "day": 124,
+  "title": "Mamba / SSM 入门",
+  "sections": [
+    {
+      "h": "Transformer 的阿喀琉斯之踵",
+      "md": "先算一笔账：Transformer 推理时，KV cache 随序列**线性增长**（显存），每步生成还要扫一遍整个 cache（全程 O(N²)）。对话越长越慢越贵——长对话 Agent 的结构性痛点。\n\n理想架构：**训练可并行**（attention 之能），**推理状态恒定**（RNN 之形）。状态空间模型（SSM）奔此而去，Mamba 是出圈之作。\n\n一句话定位：Mamba = 有选择性记忆、真能训起来的 RNN。"
+    },
+    {
+      "h": "SSM 基础：从连续系统到序列模型",
+      "md": "SSM 本体是线性微分方程：\n\n```\nx'(t) = A·x(t) + B·u(t)     （状态怎么演化）\ny(t) = C·x(t)               （状态怎么读出）\n```\n\nu 输入、x 隐状态（d_state 如 16 维）、y 输出。处理离散 token 先**离散化**——以步长 Δ 把微分方程变递推：\n\n```\nx_k = Ā·x_{k-1} + B̄·u_k,   y_k = C·x_k\n```\n\n这就是一个线性 RNN！S4（Mamba 前身）两个关键贡献：**HiPPO 初始化**——特殊构造 A，让状态按时间尺度压缩记忆；**卷积形式训练**——A、B、C 与输入无关（LTI），整序列输出可写成一次卷积，GPU 完全并行；推理再切回递推，状态恒定。两全其美……吗？"
+    },
+    {
+      "h": "Mamba 的两刀",
+      "md": "S4 的死穴：参数与输入无关 → 模型**不能根据内容决定记什么忘什么**（无选择性），长程推理任务打不过 attention。Mamba 的两刀：\n\n**1. 选择性 SSM（selective）**：让 Δ、B、C 变成输入 u 的函数——\n\n```\nΔ_k = softplus(Linear(u_k))    # 步长可学、随内容变\n```\n\nΔ 大 → 状态被当前输入**覆盖**（记新忘旧）；Δ 小 → 状态保持。这就是「选择性记忆」。代价：LTI 破坏，卷积形式失效，训练并行性告急。\n\n**2. 硬件感知并行扫描**：递推 x_k = Ā_k·x_{k-1} + B̄_k·u_k 是可并行的 **scan**（前缀运算）；再把扫描、门控、激活融合进一个 kernel，中间状态留 SRAM 不落地——FlashAttention 的 IO 感知思路搬到了 scan 上。\n\n结果：训练 O(N) 且并行；推理每步 O(1) 状态更新、无 KV cache。论文口径：长序列下吞吐约为同规模 Transformer 的 5×。"
+    },
+    {
+      "h": "PyTorch 实现简化版 SSM",
+      "md": "教学版：离散化 + 朴素 scan 循环（看清结构，无并行加速）：\n\n```python\nimport torch, torch.nn.functional as F\n\nclass TinySSM(torch.nn.Module):\n    def __init__(self, d_model, d_state=16):\n        super().__init__()\n        self.d_state = d_state\n        self.x_proj = torch.nn.Linear(d_model, d_state + 2 * d_model)\n        # A 负定小步长：记忆稳定衰减\n        self.A_log = torch.nn.Parameter(torch.log(torch.rand(d_state) * 0.1))\n\n    def forward(self, u):                     # u: (B, L, d_model)\n        A = -torch.exp(self.A_log)             # 负定 → 记忆指数衰减\n        delta, B, C = self.x_proj(u).chunk(3, dim=-1)[:3]  # 简化：尺寸对齐教学\n        delta = F.softplus(delta)\n        h = u.new_zeros(u.size(0), A.size(0))  # (B, d_state) 恒定状态\n        outs = []\n        for t in range(u.size(1)):             # 朴素 scan（真实 Mamba 并行化）\n            dB = delta[:, t, :1]               # 标量步长\n            h = h * torch.exp(dB * A) + dB * B[:, t] * u[:, t, :1]\n            outs.append(h @ C[:, t])\n        return torch.stack(outs, dim=1)\n```\n\n重点看循环体那两行：状态先按 `exp(Δ·A)` **衰减**（遗忘），再按 `dB·B·u` **写入**（记住）——每 token 一次 O(d_state) 更新，「RNN 之形、并行之能」。"
+    },
+    {
+      "h": "局限与生态",
+      "md": "Mamba 最大的软肋是**精确复制与检索**：状态是固定 d_state 维的有损压缩，而 attention 的 KV cache 是无损的全量缓存——needle-in-a-haystack 类任务上 SSM 明显吃瘪。行业解法是**混合架构**：大部分层 Mamba（便宜长程）+ 每隔几层一个 attention（精确检索），如 Jamba、Samba；Mamba-2 用 SSD 理论统一两者，混合更自然。\n\n对 Agent 的意义：事件流、日志、传感器这类「摘要有用、逐字检索少」的长序列，SSM 是最合算的底座；而「必须一字不差引用第 37 条工具输出」的 Agent，attention（或混合层）仍是刚需。\n\n明日预告：MoE——参数要大、计算要少的「既要又要」。"
+    }
+  ],
+  "keyPoints": [
+    "SSM 目标：训练可并行（卷积/scan）+ 推理状态恒定（RNN 形式），免 KV cache",
+    "离散化后 x_k = Ā·x_{k-1} + B̄·u_k 是线性 RNN；S4 用 HiPPO 初始化 + 卷积形式训练",
+    "Mamba 第一刀：Δ、B、C 依赖输入（选择性记忆，Δ 大覆盖记忆、Δ 小保持），代价是 LTI 破坏",
+    "Mamba 第二刀：并行 scan + kernel 融合（FlashAttention 的 IO 感知思路搬到递推），训练 O(N)",
+    "推理优势：每步 O(1) 状态更新，长序列吞吐论文口径约 5× Transformer",
+    "软肋：固定大小状态是有损压缩，精确复制/检索弱；主流答案是 Mamba+attention 混合架构（Jamba/Samba）"
+  ],
+  "quiz": [
+    {
+      "q": "SSM 路线想同时拿到哪两个特性？",
+      "options": [
+        "零参数 + 零训练",
+        "训练可并行（像 attention）+ 推理状态恒定（像 RNN，无 KV cache）",
+        "无限上下文 + 零显存",
+        "比 Transformer 更大的参数量"
+      ],
+      "answer": 1,
+      "explain": "这是架构设计的「既要又要」：attention 只有前者，朴素 RNN 只有后者，S4/Mamba 用两种形式的等价转换兼得。"
+    },
+    {
+      "q": "S4 能用卷积并行训练的前提是？",
+      "options": [
+        "序列很短",
+        "A、B、C 与输入无关（LTI 线性时不变系统），输出可写成一次卷积",
+        "GPU 支持",
+        "没有 softmax"
+      ],
+      "answer": 1,
+      "explain": "LTI 性质使整个序列的输入-输出映射等价于一个（很长的）卷积核，可一次性并行计算——这正是选择性破坏掉的东西。"
+    },
+    {
+      "q": "选择性 SSM 中步长 Δ 变大意味着？",
+      "options": [
+        "状态更保留历史",
+        "当前输入对状态的覆盖更强——记住当前、遗忘过去",
+        "计算更快",
+        "精度更高"
+      ],
+      "answer": 1,
+      "explain": "Δ 控制「读入多少、遗忘多少」：大 Δ 让新输入主导状态（覆盖），小 Δ 让状态保持（忽略当前），内容感知由此而来。"
+    },
+    {
+      "q": "Mamba 把 FlashAttention 的哪条思路搬到了 scan 上？",
+      "options": [
+        "online softmax",
+        "IO 感知：并行 scan + 算子融合，中间状态留在 SRAM 不落地 HBM",
+        "tiling QKV",
+        "因果掩码跳块"
+      ],
+      "answer": 1,
+      "explain": "递推的瓶颈同样是访存；融合成单个 kernel、状态驻留 SRAM，训练才真正快起来——算法设计思想跨结构迁移。"
+    },
+    {
+      "q": "Mamba 在 needle-in-a-haystack 类任务上吃瘪的根本原因是？",
+      "options": [
+        "训练数据不够",
+        "固定 d_state 的状态是有损压缩，塞不下需要逐字检索的全量信息（attention 的 KV cache 是无损缓存）",
+        "softmax 数值不稳",
+        "参数太少"
+      ],
+      "answer": 1,
+      "explain": "口袋大小固定，装不下「任何位置都可能被引用」的信息量；attention 恰好在这点上是无损的，所以混合架构应运而生。"
+    },
+    {
+      "q": "Jamba 等混合架构的主流配方是？",
+      "options": [
+        "全 Mamba 层",
+        "大部分 Mamba 层负责长程，每隔几层插入 attention 层负责精确检索",
+        "全 attention",
+        "CNN + RNN"
+      ],
+      "answer": 1,
+      "explain": "两种机制互补：SSM 提供廉价的常量状态长程，attention 提供无损随机访问，按层穿插即两者兼得。"
+    }
+  ]
+}

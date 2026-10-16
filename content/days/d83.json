@@ -1,0 +1,90 @@
+{
+  "day": 83,
+  "title": "三大架构对比：Encoder/Decoder/Enc-Dec",
+  "sections": [
+    {
+      "h": "注意力掩码决定信息流",
+      "md": "BERT、GPT、T5 用的都是 Transformer，真正的分野只有一个：**每个 token 允许看谁**。用一个下三角矩阵（causal mask）挡住「未来」，模型就被迫做自回归生成；把掩码全部放开，每个位置双向看全句，模型成为强大的理解器；把双向的编码器接上单向的解码器，就得到输入→输出的转换器。\n\n| 架构 | 代表 | 看信息的方向 | 预训练目标 | 天生擅长 |\n|---|---|---|---|---|\n| Encoder-only | BERT | 双向 | 掩码填空 MLM | 分类、检索、NER |\n| Decoder-only | GPT | 单向（因果） | 预测下一词 | 生成、对话 |\n| Enc-Dec | T5 | 编码双向 + 解码单向 | span 还原 | 翻译、摘要 |\n\n今天各读一篇论文（BERT、GPT-2、T5 各 1 小时），最后把这张表画成一张架构图。"
+    },
+    {
+      "h": "BERT：双向理解的极致",
+      "md": "BERT（2018）只用了 Transformer 的 encoder。**MLM（Masked Language Model）**：随机遮住 15% 的 token 让模型猜——被遮位置同时看左右文，理解任务的本质（看上下文填空）与预训练完全一致。\n\n细节：15% 被选中的 token 里，80% 换成 [MASK]、10% 换成随机词、10% 保留原词——缓解训练/推理时 [MASK] 不出现的分布差异。句首的 [CLS] 向量聚合全句语义，接一个线性层就能做分类；双句任务训练了 NSP（RoBERTa 后来证明 NSP 没用，删掉更好）。\n\n**天花板也在双向**：每个位置都能看到答案的上下文，无法自然地做自回归生成。今天 BERT 系活在 embedding/检索模型里（BGE、reranker），而不是对话模型。"
+    },
+    {
+      "h": "GPT：把一切变成「下一个词」",
+      "md": "GPT-1（2018）与 GPT-2（2019）只用 decoder：causal mask 保证位置 t 只能看到 ≤t 的 token，训练目标就是**预测第 t+1 个词**。看似比 MLM 弱——每个位置只有单向信息——但换来两个决定性的性质：\n\n1. **训练即生成**：损失逐位置计算，所有 token 一次前向全部有监督信号；MLM 只监督 15% 的位置\n2. **零任务边界**：翻译、摘要、问答统一为「续写」——GPT-2 论文标题就是 Language Models are Unsupervised Multitask Learners\n\nGPT-2 把模型拉到 1.5B 参数，展示 zero-shot 能力；GPT-3 沿这条路走到 175B + few-shot prompting，直接开启了 LLM 时代。今天所有对话模型（GPT-4、Claude、LLaMA、Qwen）都是 decoder-only。"
+    },
+    {
+      "h": "T5：text-to-text 的统一框架",
+      "md": "T5（2019，Transfer Text-to-Text Transformer）用完整 encoder-decoder：编码器双向读入，解码器自回归输出，目标统一为**文本到文本**——分类任务是输出 label 字符串，翻译是输出译文，回归任务输出数字字符串。全部 NLP 任务共享一套接口。\n\n预训练目标是 **span corruption**：随机挖掉连续片段（共约 15%），输入是被挖空+哨兵标记的文本，输出是被挖内容——可以看作 MLM 的 seq2seq 化，每个被遮位置都有生成式监督。\n\n工程要点：encoder 与 decoder 可以共享参数降低成本；T5 用相对位置偏置而非绝对位置编码。这条血脉延续到 Flan-T5（指令微调经典基线）与 UL2。\n\n**代价**：参数劈成两半，推理还要先跑编码器，自回归对话场景不如 decoder-only 高效——KV cache 只能用在解码端。"
+    },
+    {
+      "h": "画图与选型：为什么 decoder-only 赢了",
+      "md": "动手画对比图（1 小时）：三列并排，每列画堆叠的层——BERT 列每层画**全连接的双向注意力**；GPT 列画**下三角掩码**；T5 列左边双向、右边单向、中间用 cross-attention 连接。标注各自的预训练目标与 [CLS]/哨兵等特殊 token。\n\n选型结论：\n\n- 要**生成**（对话、写作、代码）→ decoder-only，生态与推理优化（KV cache、continuous batching）全在这边\n- 要**稠密句子向量**（检索、RAG 召回）→ encoder 系（或 decoder + 末层平均池化）\n- 要**输入→输出的对齐任务**且输入很长（翻译、摘要）→ enc-dec 仍有一席之地\n\ndecoder-only 一统天下的原因不是它「更强」，而是**训练简单（无监督信号无处不在）、scaling 友好、推理栈成熟**——工程可行性常常胜过单点最优。\n\n明日预告：Week 12 复盘 + 跑通 nanoGPT，开始组装自己的 mini-GPT。"
+    }
+  ],
+  "keyPoints": [
+    "架构分野在注意力掩码：双向 = 理解，因果掩码 = 自回归生成",
+    "BERT 的 MLM：遮 15%（80/10/10 替换策略），[CLS] 做分类；缺点是无法自然生成",
+    "GPT 的下一词预测：全位置监督、任务统一为续写，是 LLM 时代路线",
+    "T5 的 text-to-text：span corrosion + 编码器双向/解码器单向 + cross-attention",
+    "decoder-only 胜出靠训练数据无限、scaling 与推理生态（KV cache），非单点性能"
+  ],
+  "quiz": [
+    {
+      "q": "BERT 与 GPT 架构上最本质的区别是？",
+      "options": [
+        "BERT 更大",
+        "BERT 双向注意力无掩码，GPT 用因果掩码只能看左侧",
+        "GPT 没有 FFN 层",
+        "BERT 不用注意力"
+      ],
+      "answer": 1,
+      "explain": "信息流决定能力：双向适合理解填空，单向因果掩码才可能自回归生成下一个词。"
+    },
+    {
+      "q": "BERT 的 MLM 把被选中的 15% token 以 80/10/10 处理，10% 换成随机词的目的是？",
+      "options": [
+        "增加数据量",
+        "缓解训练与推理时 [MASK] 不会出现的分布差异，让所有位置都学到鲁棒表示",
+        "为了平衡正负样本",
+        "随机替换没有作用，是历史遗留"
+      ],
+      "answer": 1,
+      "explain": "若只用 [MASK]，微调/推理时没有掩码 token，表示会有偏；混入随机词与原词让模型不能依赖「这里被遮过」的泄漏。"
+    },
+    {
+      "q": "为什么说 GPT 的训练目标监督信号比 MLM 更密集？",
+      "options": [
+        "GPT 每层参数更多",
+        "因果语言模型每个位置都预测下一词，一次前向全部位置有损失；MLM 只监督 15%",
+        "GPT 用了更大的 batch",
+        "MLM 没有损失函数"
+      ],
+      "answer": 1,
+      "explain": "逐 token 的下一词预测让序列中每个位置都产生梯度信号，数据利用率高，scaling 时尤其划算。"
+    },
+    {
+      "q": "T5 把分类任务也转成生成（输出 label 字符串），这体现了什么思想？",
+      "options": [
+        "分类必须用生成模型",
+        "text-to-text 统一接口：所有 NLP 任务共享同一输入输出格式与同一套模型",
+        "为了减少参数量",
+        "为了让训练更快"
+      ],
+      "answer": 1,
+      "explain": "统一为文本进文本出，预训练/微调/多任务共享接口；代价是输出空间变成自由生成，解码开销更大。"
+    },
+    {
+      "q": "自回归推理时 decoder-only 的 KV cache 为什么对 enc-dec 不那么直接？",
+      "options": [
+        "enc-dec 没有注意力",
+        "编码器输出与解码端 cross-attention 的缓存结构更复杂，还需先跑完编码器",
+        "enc-dec 不能生成",
+        "KV cache 只支持 LSTM"
+      ],
+      "answer": 1,
+      "explain": "decoder-only 对整个上文一份 KV cache 即可续写；enc-dec 先编码（一次性），解码端还要维护对编码器输出的 cross-attention 缓存，推理栈更复杂。"
+    }
+  ]
+}

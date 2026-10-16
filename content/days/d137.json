@@ -1,0 +1,65 @@
+{
+  "day": 137,
+  "title": "Rerank + HyDE + Multi-Query",
+  "sections": [
+    {
+      "h": "两阶段架构：召回 + 重排",
+      "md": "检索系统工业界的标准形态是两级漏斗：**召回（retrieve）**用便宜的 bi-encoder 从百万候选里粗筛出 top-100，**重排（rerank）**用昂贵的 cross-encoder 对这 100 条精排出 top-5 进 prompt。\n\n为什么 cross-encoder 更准？bi-encoder 把 query 和文档**各自独立**压缩成向量，交互信息在压缩时丢失；cross-encoder 把 `query + 文档` **拼接后一起过模型**，每一层 attention 都在做 query 词与文档词的全交互——它能看见\"术语是否精确命中、数字是否对上\"这类细粒度证据。\n\n代价：cross-encoder 的输入依赖 query，**无法离线预计算**，每对 (query, doc) 都要一次前向。所以只能放在漏斗末端：100 对可接受，100 万对天方夜谭。这就是两阶段的根本逻辑——**便宜的方法管覆盖，昂贵的方法管精度**。"
+    },
+    {
+      "h": "Rerank 模型：BGE-reranker 与 Cohere",
+      "md": "开箱可用的两条路：\n\n```python\n# 路线一：本地开源（bge-reranker-v2-m3，中文强）\nfrom sentence_transformers import CrossEncoder\nreranker = CrossEncoder(\"BAAI/bge-reranker-v2-m3\", max_length=512)\npairs = [(query, doc) for doc in candidates]        # 100 对\nscores = reranker.predict(pairs)                     # 每对一个相关性分\ntop5 = sorted(zip(candidates, scores), key=lambda x: -x[1])[:5]\n\n# 路线二：API（Cohere Rerank，按次计费、零运维）\nimport cohere\nr = cohere.Client().rerank(model=\"rerank-v3.5\", query=query,\n                            documents=candidates, top_n=5)\n```\n\n工程要点：\n\n- rerank 分数用法二选一：**排序取 top-k**，或**设阈值过滤**（低于阈值的直接丢——检索没有相关内容时宁可少给上下文也不给噪声）\n- 延迟预算：100 对在 GPU 上几百毫秒、CPU 上可能秒级——是否上 GPU、是否减候选数（100→50），由你的 p99 预算倒推\n- 经验数字：在中文知识库场景，加一层 bge-reranker 常带来 MRR@10 提升 10–20%，**通常是单点投入产出比最高的优化**"
+    },
+    {
+      "h": "HyDE：用假想文档检索",
+      "md": "洞察：query 和文档在嵌入空间里**不对称**——query 短、口语化、是疑问句；文档长、书面、是陈述句。让 query 直接去匹配文档向量，等于让两种文体互相贴脸。\n\n**HyDE（Hypothetical Document Embeddings）** 反向操作：先让 LLM 针对问题\"编一篇理想中的答案\"（**允许内容不准**，只要文风和形态像文档），再用这篇假想文档的向量去检索——变成**文档对文档**的匹配，天然对称。\n\n```python\nfake_doc = llm.invoke(\n    \"请写一段可能包含以下问题答案的文档片段，\"\n    \"不必真实，风格书面化：\\n问题：\" + query).content\nvec = embed(fake_doc)          # 用假文档的向量而非 query 向量\nhits = vector_db.search(vec, k=10)\n```\n\n**失败模式必须知道**：在专业领域（医疗、法律、内部黑话），LLM 编的假文档可能方向性跑偏，反而把检索带进沟里。缓解：few-shot 给假文档定格式与领域词汇；或只对\"长尾/口语化 query\"启用 HyDE，精确 query 走原向量。成本：每次查询多一次 LLM 调用 + 延迟。"
+    },
+    {
+      "h": "Multi-Query：多视角改写",
+      "md": "一个 query 从一个角度检索，只覆盖一种表述。**Multi-Query** 让 LLM 把问题改写成 N 个不同视角（同义改写、拆成子问题、补全指代），并行检索后融合去重：\n\n```python\nprompt = (\"把以下问题改写成 3 个不同角度的检索查询，\"\n          \"覆盖同义词与子问题，输出 JSON 数组：\\n\" + query)\nqueries = json.loads(llm.invoke(prompt).content) + [query]   # 原query保留\nall_hits = [search(q, k=20) for q in queries]\nmerged = rrf(*all_hits)[:20]            # 复用 Day135 的 RRF\n```\n\n这就是所谓 RAG Fusion 的核心。收益：**覆盖面**——不同表述命中的文档池显著变大，漏检率下降；成本：一次 LLM 改写 + N 倍检索调用。工程上常与 HyDE 混用（改写出的某个视角直接用 HyDE 假文档向量），并把改写结果缓存（query 归一化后作 key，热门问题命中率不低）。"
+    },
+    {
+      "h": "组合成一条完整流水线",
+      "md": "到此为止的完整检索管线：\n\n```text\nquery ─→ [可选] Multi-Query 改写 ─→ 每路 BM25 + 稠密 混合召回\n     ─→ RRF 融合 top-100 ─→ cross-encoder rerank ─→ 阈值过滤 ─→ top-5 进 prompt\n```\n\n平台视角的三点纪律：\n\n- **每一段独立可开关、可评估**——Day 139 的分阶段指标（context precision/recall）就是为定位\"哪一段拖了后腿\"设计的，别把整条管线当黑盒调\n- 改写/HyDE/rerank 都加**配置开关 + 抽样开关**：不是所有查询都值得花这些延迟，按 query 复杂度路由\n- rerank 阈值、top-k、是否启用 HyDE 全部进配置中心版本化——线上做 A/B 的前提\n\n明天的 GraphRAG 处理这条流水线依然无力的另一类问题：全局性、多跳关系型问题。"
+    }
+  ],
+  "keyPoints": [
+    "两阶段漏斗：bi-encoder 粗召回 top-100（可离线建索引），cross-encoder 精排 top-5（全交互、不可预计算）",
+    "cross-encoder 更准因为 query 与文档拼接后逐层 attention 全交互，能看清精确命中与数字证据；代价是每对一次前向",
+    "bge-reranker-v2-m3 中文开箱即用，常带来 MRR@10 提升 10–20%，通常是单点性价比最高的优化",
+    "HyDE 用 LLM 生成的假想文档向量做 doc-doc 对称匹配；专业领域会跑偏，需 few-shot 约束或按 query 类型选择性启用",
+    "Multi-Query 多视角改写 + RRF 融合提升覆盖面；完整管线每段独立开关、独立评估，别当黑盒调"
+  ],
+  "quiz": [
+    {
+      "q": "为什么 cross-encoder 不能像 bi-encoder 那样离线预计算文档向量？",
+      "options": ["cross-encoder 模型太大无法离线加载", "cross-encoder 的输入是 query 和文档的拼接，输出依赖具体 query，每个新 query 都要和候选重新前向", "cross-encoder 不支持批量推理", "因为 cross-encoder 只能处理英文"],
+      "answer": 1,
+      "explain": "bi-encoder 中文档向量与 query 无关，可提前算好建 ANN 索引；cross-encoder 把 (query, doc) 一起送入模型做全交互，换一个 query 全部重算。所以它注定只能服务漏斗末端的小候选集。"
+    },
+    {
+      "q": "HyDE 提升检索的机制是？",
+      "options": ["让 LLM 直接生成正确答案再返回给用户", "让 LLM 生成假想文档，用其向量做检索，把 query-doc 的不对称匹配变成 doc-doc 的对称匹配", "把 query 翻译成英文提升 embedding 质量", "用知识图谱扩充 query"],
+      "answer": 1,
+      "explain": "query 短而口语化、文档长而书面化，两者在嵌入空间文体不对称。HyDE 让 LLM 先\"编\"一篇形态像文档的内容（事实允许不准），用它的向量检索——形态对齐后相似度信号更干净。"
+    },
+    {
+      "q": "以下哪种场景 HyDE 最可能让效果变差？",
+      "options": ["口语化的长尾问题", "专业领域且 LLM 缺乏领域知识，生成的假想文档术语方向跑偏", "多语言混合语料", "query 很短只有两三个词"],
+      "answer": 1,
+      "explain": "HyDE 的命门在\"假想文档至少形态与方向正确\"。领域黑话重、LLM 没见过内部术语时，编出来的文档可能南辕北辙，其向量把检索整体带偏——此时应回退原 query 向量或用 few-shot 注入领域词汇。"
+    },
+    {
+      "q": "Multi-Query（RAG Fusion）策略的主要收益与代价是？",
+      "options": ["收益是延迟更低，代价是精度下降", "收益是多视角覆盖降低漏检率，代价是每次多一次 LLM 改写调用 + N 倍检索请求", "收益是省 token，代价是需要训练模型", "没有代价，只有收益"],
+      "answer": 1,
+      "explain": "改写成 N 个视角查询并行检索再 RRF 融合，覆盖了不同表述的文档池，漏检显著下降；但改写本身是一次 LLM 调用，检索量乘 N。适合检索质量瓶颈在召回覆盖的场景，并配 query 缓存摊薄成本。"
+    },
+    {
+      "q": "两阶段检索里\"召回管覆盖、重排管精度\"的分工，工程上的直接含义是？",
+      "options": ["召回用最贵的模型，重排用最便宜的", "召回阶段应调高召回率（宁多勿漏，top-100），精排阶段再由 cross-encoder 砍掉噪声取 top-5", "两阶段应使用同一个模型", "重排阶段不需要任何阈值过滤"],
+      "answer": 1,
+      "explain": "漏斗逻辑：便宜的高吞吐方法负责\"别漏\"（宁可多给候选），昂贵的精细方法负责\"别错\"（在百条内看清证据排序）。阈值过滤是重排的补充保险——没有相关内容时宁可返回空也不喂噪声给生成。"
+    }
+  ]
+}

@@ -1,0 +1,90 @@
+{
+  "day": 81,
+  "title": "Tokenizer：Byte-Level BPE",
+  "sections": [
+    {
+      "h": "文本如何进入模型：第一道关卡",
+      "md": "模型只认数字：一段文本先被切成 **token**（子词片段），每个片段对应词表里的一个整数 id，再查 embedding 表变成向量。切分策略是一场三角权衡：\n\n- **词级**：每个词一个 id——词表动辄几十万，遇到生僻词直接抓瞎（OOV）\n- **字符级**：永不 OOV——但「机器学习」要占 4 个位置，序列太长，注意力开销平方爆炸\n- **子词级（BPE）**：常见词整块吃下，生僻词拆成碎片——词表可控、序列紧凑，是所有现代 LLM 的选择\n\n衡量 tokenizer 好坏的核心指标是**压缩率**：平均每个 token 覆盖多少字节。同样的上下文窗口，压缩率越高，装得下的信息越多——中文用户对这一点尤其敏感（同样的内容往往比英文多花 1.5–2 倍 token，即「中文税」）。"
+    },
+    {
+      "h": "BPE 算法：从字节到子词的演化",
+      "md": "BPE（Byte Pair Encoding）原本是 1994 年的文本压缩算法，2016 年被 Sennrich 引入 NLP。直觉：**语料里反复出现的相邻片段，值得分配一个专属 id**。训练流程（对照 Karpathy 的 minbpe 仓库）：\n\n1. 把语料转成字节序列，初始词表 = 256 个字节值\n2. 统计所有**相邻对**的出现次数\n3. 把出现最多的对合并成新 token，加入词表\n4. 回到第 2 步，重复直到达到目标词表大小\n\n```\n语料：aaabdaaabac\n统计：相邻对 (a,a) 出现 4 次最多 → 合并 Z=aa\n结果：ZabdZabac，词表 +1\n下一轮 (Z,a) 出现 2 次最多 → 再合并……\n```\n\n每轮合并只做一件事：数频率、挑最大、替换。`merges` 列表记录合并顺序，它就是 tokenizer 的全部知识——**编码时必须按训练时的顺序应用这些规则**。"
+    },
+    {
+      "h": "为什么必须是 byte-level",
+      "md": "早期 BPE 在 Unicode 字符上运行：先跑一套预分词，再把未知字符标为 UNK。byte-level BPE（GPT-2 引入）换了个思路：**在原始字节层面做 BPE**，基表固定 256 个字节值，任何 UTF-8 文本都能编码——不存在 UNK，永不 OOV。\n\n代价是初始序列更长（一个汉字占 3 字节），但高频组合很快被合并掉。这带来一个重要性质：\n\n> 任何字符串、任何语言、甚至乱码和 emoji，都保证能被编码成合法 token 序列，且能无损解码回来。\n\n中文场景尤其受益：「机器」「学习」「我们」这类高频词在训练后通常各自成为单 token，而不是 6 个字节。字节级还天然对齐了代码、数字、混排文本——GPT-4 的词表（约 10 万）正是 byte-level BPE，GPT-2 是 50257。"
+    },
+    {
+      "h": "动手：在中文语料上训练 BPE",
+      "md": "用一小段中文维基语料，手动跑 minbpe 的训练循环：\n\n```python\nfrom collections import Counter\n\ndef get_stats(ids):\n    return Counter(zip(ids, ids[1:]))   # 相邻对计数\n\ndef merge(ids, pair, idx):\n    out, i = [], 0\n    while i < len(ids):\n        if i < len(ids)-1 and (ids[i], ids[i+1]) == pair:\n            out.append(idx); i += 2\n        else:\n            out.append(ids[i]); i += 1\n    return out\n\ntext = open('wiki_zh.txt', encoding='utf-8').read()\nids = list(text.encode('utf-8'))       # 字节序列\nmerges, vocab = {}, list(range(256))\nfor i in range(300):                    # 学 300 条规则\n    stats = get_stats(ids)\n    pair = max(stats, key=stats.get)\n    ids = merge(ids, pair, 256 + i)\n    merges[pair] = 256 + i\n    vocab.append(vocab[pair[0]] + vocab[pair[1]])\n```\n\n训练完检查 `merges`：前几十条规则几乎全是中文字节的组合——语料在自动「发现」常用字与常用词。再算压缩率：`len(原始字节数) / len(编码后 token 数)`，盯着它随规则数增加而上升，直到收益趋平——那就是词表大小的合理取值区间。"
+    },
+    {
+      "h": "与 LLM 的关联：tokenizer 决定上下文利用率",
+      "md": "tokenizer 在模型训练前就冻结了，它决定三件事：\n\n1. **词表大小**：太小序列变长、太大 embedding 表臃肿。开源模型从 32k（LLaMA-1/2）走向 128k+（Qwen、DeepSeek），就是为了缓解中文等多语言税\n2. **上下文成本**：压缩率差 20%，同样的 4k 窗口实际少装 20% 的信息\n3. **下游怪癖**：模型不会拼写出 tokenizer 切碎的词（数不清字母 r 有几个），算术也受数字切分方式影响\n\nAgent 视角：system prompt 每轮都占 token——tokenizer 的压缩率直接进了运营成本。\n\n明日预告：把今天的 merge 循环扩展成完整的 encode/decode，不调包写一个能和 tiktoken 对答案的 tokenizer。"
+    }
+  ],
+  "keyPoints": [
+    "BPE 训练 = 反复「数相邻对频率 → 合并最高频对」，merges 列表即全部知识",
+    "byte-level 基表 256 个字节值：任何 UTF-8 文本可编码可解码，永不 OOV",
+    "压缩率 = 原始字节数 / token 数，决定同样窗口装多少信息",
+    "中文在 UTF-8 中每字占 3 字节，高频词经 BPE 合并后成为单 token",
+    "词表大小权衡：32k→128k 的扩容主要为缓解多语言「中文税」"
+  ],
+  "quiz": [
+    {
+      "q": "BPE 每一轮训练迭代做的是什么？",
+      "options": [
+        "把出现频率最低的 token 拆开",
+        "统计相邻对频率，把出现最多的对合并成新 token",
+        "随机采样一对合并",
+        "用神经网络预测该合并哪一对"
+      ],
+      "answer": 1,
+      "explain": "贪心策略：反复合并最高频相邻对，常用组合逐渐长成完整子词；merges 的顺序就是编码规则。"
+    },
+    {
+      "q": "byte-level BPE 相比字符级 BPE 的核心优势是？",
+      "options": [
+        "词表可以更小到 100 以内",
+        "以 256 字节为基表，任何文本（含未知字符、emoji）都能编码，不存在 OOV",
+        "不需要训练合并规则",
+        "序列长度一定更短"
+      ],
+      "answer": 1,
+      "explain": "字节是 UTF-8 文本的原子单位，256 个基 token 覆盖一切字符串，且编码解码严格可逆，彻底消灭 UNK。"
+    },
+    {
+      "q": "一个常用汉字在 UTF-8 中通常占 3 字节。经 BPE 训练后它会怎样？",
+      "options": [
+        "仍然是 3 个独立 token",
+        "高频字/词的 3 个字节大概率被合并为 1 个 token",
+        "被删除",
+        "必须转为拼音"
+      ],
+      "answer": 1,
+      "explain": "高频组合最早、最多次被合并：常用字 3 字节先合成单 token，高频双字词再进一步合并成词级 token。"
+    },
+    {
+      "q": "词表大小从 32k 扩到 128k，主要代价与收益是？",
+      "options": [
+        "收益：序列更长；代价：完全无法编码英文",
+        "收益：生僻内容不再 OOV、多语言压缩率提升；代价：embedding 表更大、softmax 计算更多",
+        "没有任何差别",
+        "收益：模型更深；代价：层数减少"
+      ],
+      "answer": 1,
+      "explain": "扩词表把更多多语言组合固化成单 token，降低「中文税」；代价是参数与输出层计算随词表线性增长。"
+    },
+    {
+      "q": "为什么说 tokenizer 影响了模型的「拼写能力」？",
+      "options": [
+        "tokenizer 会自动纠正拼写错误",
+        "被切成多 token 的词，模型内部很少见到字母级拼法，数字母等任务容易出错",
+        "模型从不处理英文",
+        "词表越大拼写越差"
+      ],
+      "answer": 1,
+      "explain": "经典案例：strawberry 里几个 r——该词若整体是单 token，模型没有逐字母视角，字母计数天然困难。"
+    }
+  ]
+}

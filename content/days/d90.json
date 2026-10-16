@@ -1,0 +1,66 @@
+{
+  "day": 90,
+  "title": "学习率 + Warmup + Cosine",
+  "sections": [
+    {
+      "h": "学习率：最重要的超参数",
+      "md": "同样的模型和数据，学习率（LR）差 10 倍，结果可以从「顺利收敛」到「彻底发散」。直觉：梯度下降是蒙眼下山，**步子太大（LR 高）会跨过谷底来回弹，步子太小（LR 低）永远走不到**。\n\n为什么Transformer 特别娇气？训练初期 Attention/MLP 的权重是随机的，梯度方向噪声很大；而且 Adam 的二阶矩估计 v 在前几千步方差极大，等效步长失控。所以 LLM 的 LR 几乎从不恒定，而是走「**爬坡 → 冲顶 → 缓降**」三段式：warmup 线性升到 peak，再按 cosine 曲线衰减到接近 0。\n\n> 经验数量级（AdamW + 50M–1B 模型）：peak LR 约 1e-3 到 6e-4，最终 LR 约为 peak 的 1/10。"
+    },
+    {
+      "h": "Warmup：为什么要慢慢加速",
+      "md": "机制上有三层原因：\n\n1. **Adam 的冷启动**：初期 v ≈ 0，除法 `m/√v` 会把更新放大到失控；LR 小等于给统计量留出热身时间\n2. **初始梯度过大**：随机权重的 loss 高、梯度大，直接大步走容易一步「跳出」好的流域\n3. **权重还没「定型**」：BatchNorm/Attention 的早期激活分布剧烈变化，大 LR 会把参数推到难恢复的区域\n\n无 warmup 的典型症状：训练前几百步 loss 就开始震荡上扬，甚至直接 NaN。大 batch 训练界还有线性缩放规则（batch ×k 则 LR ×k），但 warmup 前几百到几千步无论如何都保留。"
+    },
+    {
+      "h": "Cosine decay：优雅地收尾",
+      "md": "peak 之后，LR 按余弦从 η_max 平滑滑到 η_min：\n\n```\nt ∈ [0, 1] 归一化进度\nη(t) = η_min + ½(η_max − η_min)(1 + cos(π·t))\n```\n\n直觉：中段还有探索能力，末段步长趋近 0，相当于自动做「精细化打磨」。与阶梯式（step decay）相比，cosine 中期衰减更快、末期更缓，通常最终 loss 略好且无需手调降 LR 的时机。替代方案 WSD（warmup-stable-decay）在持续预训练时代很流行：长平台期 + 最后 10–20% 快速衰减，方便中途接入新数据。"
+    },
+    {
+      "h": "动手：实现并对比",
+      "md": "完整调度器（nanoGPT 同款）：\n\n```python\ndef get_lr(step, total, warmup=2000, peak=6e-4, min_lr=6e-5):\n    if step < warmup:\n        return peak * step / warmup            # 线性 warmup\n    t = (step - warmup) / max(1, total - warmup)\n    return min_lr + 0.5 * (peak - min_lr) * (1 + math.cos(math.pi * t))\n```\n\n**对比实验**（用前几天的 mini-GPT + 相同数据与 seed）：\n\n| 配置 | peak LR | 预期现象 |\n|---|---|---|\n| 无 warmup | 6e-4 | 早期震荡，可能发散 |\n| warmup 2000 + cosine | 6e-4 | 平滑下降到底 |\n| warmup 2000 + cosine | 6e-3 | 中后期发散 |\n| warmup 2000 + cosine | 6e-5 | 收敛但慢、终值偏高 |\n\n观察要点：把三条 train loss 画到同一张图上，注意「发散」往往不是慢慢变差而是突然爆掉——这就是为什么要监控而不是训完才看。"
+    },
+    {
+      "h": "今日串联",
+      "md": "warmup + cosine 是几乎所有现代 LLM 的默认：GPT-3（warmup 375 步、cosine 到 10%）、LLaMA 系列同款思路。你现在已经能读懂它们训练配置里那几行 LR 参数的含义。调参时记住优先级：**先扫 LR（对数网格：1e-4 / 3e-4 / 1e-3），再动 batch 和结构**——LR 错了，其它调参全是噪音。\n\n明天是本周收官：把 mini-GPT 在 TinyStories 上完整跑半天，开始看到 loss 稳定下降。"
+    }
+  ],
+  "keyPoints": [
+    "LR 差 10 倍结果天差地别：太大震荡发散，太小收敛慢终值差",
+    "Transformer 标配三段式调度：linear warmup → peak → cosine 衰减到 min_lr",
+    "warmup 必要性来自 Adam 二阶矩冷启动 + 初期梯度噪声大 + 激活分布未定型",
+    "cosine：η(t)=η_min+½(η_max−η_min)(1+cos(πt))，末段自动精细打磨",
+    "调参优先级：先扫 LR（对数网格），再考虑 batch/arch——LR 错则其余皆噪音",
+    "50M–1B 模型经验值：peak 6e-4 到 1e-3，min_lr 约为 peak 的 1/10"
+  ],
+  "quiz": [
+    {
+      "q": "Transformer 训练为什么普遍需要 warmup？",
+      "options": ["为了让 loss 曲线好看", "Adam 初期二阶矩估计方差大、等效步长失控，加上初始梯度噪声大，大 LR 易发散", "因为 GPU 需要预热", "为了配合数据增强"],
+      "answer": 1,
+      "explain": "Adam 更新是 m/√v，训练开始 v 接近 0 且极不稳定，步长放大失控；warmup 给统计量热身时间，也避开最嘈杂的初期梯度。"
+    },
+    {
+      "q": "warmup=2000、total=100000、peak=6e-4。step=1000 时学习率是多少？",
+      "options": ["6e-4", "3e-4", "6e-5", "0"],
+      "answer": 1,
+      "explain": "warmup 阶段线性上升：6e-4 × (1000/2000) = 3e-4。"
+    },
+    {
+      "q": "cosine 衰减走到总步数的一半（t=0.5）时，LR 大约是？",
+      "options": ["还接近 peak", "约等于 peak 和 min_lr 的中点", "已降到 min_lr", "变成 0"],
+      "answer": 1,
+      "explain": "cos(π/2)=0，η = η_min + ½(η_max−η_min)，即中点——这正是「优雅对称」的含义。"
+    },
+    {
+      "q": "无 warmup 直接用 peak LR 训练，最典型的早期症状是？",
+      "options": ["loss 完全不动", "前几百步 loss 就震荡上扬甚至 NaN", "val loss 比 train loss 低", "生成文本过于流畅"],
+      "answer": 1,
+      "explain": "初期统计不稳 + 大步长容易把参数推出好的流域，表现为早震荡、突然爆掉；这正是对比实验第一组要观察的现象。"
+    },
+    {
+      "q": "LR 设成 6e-5（过小）会发生什么？",
+      "options": ["发散成 NaN", "能收敛但很慢，同预算下终值偏高", "完全等价于 6e-4", "训练速度变慢（每秒步数下降）"],
+      "answer": 1,
+      "explain": "小 LR 稳定但每步走太短，同样步数内降不到同样深度；注意 LR 不影响每秒计算量，只影响参数移动的距离。"
+    }
+  ]
+}

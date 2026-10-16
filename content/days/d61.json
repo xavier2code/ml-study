@@ -1,0 +1,71 @@
+{
+  "day": 61,
+  "title": "Self-Attention + 缩放点积",
+  "sections": [
+    {
+      "h": "把镜头转回句子内部",
+      "md": "昨天的注意力在**两句话之间**（解码器问编码器）。今天把同一机制转向**一句话内部**：每个词直接询问句中所有词——包括自己。这就是 **self-attention**。\n\n经典例句：`The animal didn't cross the street because it was too tired.`——`it` 指 animal 还是 street？self-attention 让 `it` 的 query 与所有词的 key 比对，权重集中到 `animal`（换 `wide` 则集中到 `street`）。**指代消解**没有专门模块，是注意力的自然产物。\n\n通信角度：RNN 接力传话，信息跑 n 步；self-attention 是圆桌会议，任意词对直接对话（路径 O(1)）且全序列可并行——Transformer 两大根基。"
+    },
+    {
+      "h": "缩放点积公式",
+      "md": "每个词向量 xᵢ 被三个矩阵投影成三种角色：query（找什么）、key（是什么）、value（携带的信息）：\n\n```\nQ = X·W_Q    K = X·W_K    V = X·W_V\nAttention(Q, K, V) = softmax(Q·Kᵀ / √d_k) · V\n```\n\n一行拆开看四步：\n\n1. **Q·Kᵀ**：(n×d)@(d×n) 得 n×n 相似度矩阵——第 i 行 j 列 = 词 i 的 query 与词 j 的 key 点积\n2. **÷√d_k**：d_k 越大点积方差越大（≈ d_k），softmax 输入一大就**饱和成 one-hot**、梯度趋零；除以 √d_k 归一方差\n3. **softmax 按行归一化**：每个词得到对全句（含自己）的权重\n4. **乘 V**：按权重混合所有 value——输出每行是「该词视角的全句摘要」\n\n为什么换掉加性打分？点积是**一次矩阵乘法**（GPU 高效），大 d_k 下远快于逐对 MLP 且精度不降。工程可行性塑造架构演进。"
+    },
+    {
+      "h": "Multi-Head：多视角并行开会",
+      "md": "一次注意力只学一种「提问方式」，但语言关系多维：句法（主谓）、语义（同义）、指代（代词→名词）、位置（相邻词）。**多头注意力**并行跑 h 份注意力，每份有自己的小投影：\n\n```\nheadᵢ = Attention(Q·Wᵢ_Q, K·Wᵢ_K, V·Wᵢ_V)\nMultiHead = Concat(head₁,…headₕ) · W_O\n```\n\n总计算量不增：d_model=512、h=8 时每头 d_k=64，小头拼回 512——8 个专家各关注一种关系。论文发现有的头专做相邻位置、有的追踪句法依存——「头」成了分析 LLM 的基本单位。"
+    },
+    {
+      "h": "PyTorch 实现 Multi-Head Self-Attention",
+      "md": "不用 `nn.MultiheadAttention`，从零写一遍：\n\n```python\nclass MHA(nn.Module):\n    def __init__(self, d_model=512, n_heads=8):\n        super().__init__()\n        assert d_model % n_heads == 0\n        self.h, self.dk = n_heads, d_model // n_heads\n        self.wq = nn.Linear(d_model, d_model)\n        self.wk = nn.Linear(d_model, d_model)\n        self.wv = nn.Linear(d_model, d_model)\n        self.wo = nn.Linear(d_model, d_model)\n\n    def forward(self, x):                # (B, T, d_model)\n        B, T, D = x.shape\n        q, k, v = [w(x).view(B, T, self.h, self.dk).transpose(1, 2)\n                   for w in (self.wq, self.wk, self.wv)]  # (B,h,T,dk)\n        att = (q @ k.transpose(-2, -1)) / (self.dk ** 0.5)\n        att = att.softmax(-1)            # (B,h,T,T)\n        out = att @ v                    # (B,h,T,dk)\n        out = out.transpose(1, 2).contiguous().view(B, T, D)\n        return self.wo(out), att\n```\n\n易错点：\n\n- `view`+`transpose(1,2)` 拆头——切最后一维再换轴，不是复制多份\n- 缩放用每头维度 **dk** 不是 d_model\n- `transpose` 后接 `view` 须先 `contiguous()`\n- W_Q/W_K/W_V 独立，别共享\n\n自检：`att.sum(-1)` 每行 ≈ 1；输出形状 == 输入形状——形状保持才能堆 N 层。"
+    },
+    {
+      "h": "与 LLM 的关联",
+      "md": "Transformer 六成零件已在桌上：自注意力、多头、残差流与 LayerNorm。还缺两块：\n\n1. **掩码**（明天）：softmax 归一化时遮住「未来」——否则语言模型训练时直接作弊看答案\n2. **位置信息**（Day 63）：注意力对顺序无感（打乱词序结果不变），必须注入位置编码\n\n拼完就是 Transformer block（nanoGPT 核心）。回看：RNN 递推传信息 → LSTM 给记忆修高速 → 注意力按内容寻址 → 今天 self-attention 删掉循环——每代都在回答：**如何让远处的信息更易取用**。"
+    }
+  ],
+  "keyPoints": [
+    "Self-attention：Q=K=V 都来自同一序列，任意两词直接交互，路径 O(1) 且可并行",
+    "Attention(Q,K,V) = softmax(QKᵀ/√d_k)·V，点积打分本质是一次矩阵乘法，GPU 高效",
+    "÷√d_k 的原因：点积方差随维度增长，softmax 饱和导致梯度消失，缩放把方差归一",
+    "多头：h 个小维度注意力并行（d_k=d_model/h），各自学一种关系模式，拼接后投影",
+    "实现要点：view+transpose 拆头、缩放用 dk、transpose 后 contiguous、输出形状不变可堆层"
+  ],
+  "quiz": [
+    {
+      "q": "自注意力中 Q、K、V 的来源是？",
+      "options": ["三个不同数据集", "同一序列经三个不同投影矩阵变换得到", "分别是输入、标签和预测", "随机初始化后固定不变"],
+      "answer": 1,
+      "explain": "self 的含义即 q/k/v 同源：X 分别乘 W_Q、W_K、W_V，让每个词以三种角色（提问、被比、被取）参与交互。"
+    },
+    {
+      "q": "缩放因子 √d_k 的作用是？",
+      "options": ["减少参数量", "防止点积方差随维度增大导致 softmax 饱和、梯度趋零", "加快收敛速度一倍", "把注意力权重变为二值"],
+      "answer": 1,
+      "explain": "随机向量点积方差约为 d_k；不缩放时 softmax 输入过大、输出接近 one-hot，梯度消失——除以 √d_k 恰好把方差归一到 1。"
+    },
+    {
+      "q": "注意力矩阵 att = softmax(QKᵀ/√dk) 中第 i 行 j 列的元素表示？",
+      "options": ["词 j 对词 i 的注意力权重（i 问 j）", "词 i 和 j 的词向量距离", "词 i 的 value", "第 i 个头的输出"],
+      "answer": 0,
+      "explain": "Q 的第 i 行（query）与 K 的第 j 行（key）点积经 softmax，得到位置 i 对位置 j 的归一化权重；每行和为 1。"
+    },
+    {
+      "q": "多头注意力中 d_model=512、h=8 时，每个头的维度是？",
+      "options": ["512", "8", "64", "4096"],
+      "answer": 2,
+      "explain": "把最后一维切成 8 份：512/8=64。各头在小维度上并行计算后拼接回 512，总计算量与单头 512 相当。"
+    },
+    {
+      "q": "为什么点积注意力取代了 Bahdanau 的加性打分？",
+      "options": ["精度显著更高", "点积可打包成矩阵乘法，GPU 上远快于逐对 MLP，大规模训练可行", "不需要 softmax", "参数更多表达能力更强"],
+      "answer": 1,
+      "explain": "点积即一次 GEMM，硬件利用率极高；加性打分要对每对位置跑前馈网络。两者精度相近时，工程效率决定了架构演进方向。"
+    },
+    {
+      "q": "句子 `The animal didn't cross the street because it was too wide.` 中，`it` 的自注意力权重大概率集中在？",
+      "options": ["animal", "street", "didn't", "均匀分布"],
+      "answer": 1,
+      "explain": "wide（宽）语义上修饰街道，注意力会捕捉这一指代关系；换回 tired 则集中到 animal——语义决定权重，无需显式指代模块。"
+    }
+  ]
+}

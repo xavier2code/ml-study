@@ -1,0 +1,67 @@
+{
+  "day": 113,
+  "title": "KV cache 原理",
+  "sections": [
+    {
+      "h": "直觉：自回归生成的重复计算",
+      "md": "GPT 式模型逐 token 生成：第 t 步要用**全部前文**的 K、V 计算注意力。朴素实现每生成一个新 token 就把整个序列重新过一遍网络——生成 L 个 token 的总计算量是 O(L²) 级别，而且绝大部分是重复劳动：历史 token 的 K、V 根本没变。\n\n**KV cache 就是把每层算出的 K、V 存进显存**，新 token 只需计算自己的 q、k、v，把 k、v 追加进缓存，再做一次注意力。于是生成分成两个阶段：\n\n- **prefill**：一次性处理整个 prompt，产出第一批 KV——计算密集\n- **decode**：每步只处理 1 个 token——访存密集\n\n这个两阶段差异是后面所有推理优化（PagedAttention、continuous batching、投机解码）的出发点。"
+    },
+    {
+      "h": "KV cache 数学 + 显存计算",
+      "md": "每个 token 每层要存 K 和 V 两份，各占 kv_heads × head_dim：\n\n```\nKV 显存 = 2 × layers × seq_len × batch × num_kv_heads × head_dim × bytes\n```\n\n以 Llama-2-7B（32 层、32 头、head_dim 128、fp16 即 2 字节）为例，**每 token 512 KiB**：\n\n```\n2 × 32 × 32 × 128 × 2 B = 524288 B = 512 KiB\n```\n\n- batch=1 生成满 4096 token → 2 GiB KV cache\n- 同样 4096 上下文，batch=16 → 32 GiB，比权重本身还大\n\n| 模型 | num_kv_heads | 每 token KV (fp16) |\n|---|---|---|\n| Llama-2-7B | 32（MHA） | 512 KiB |\n| Mistral-7B（GQA） | 8 | 128 KiB |\n\n**GQA**（grouped-query attention）让多个 query 头共享一组 KV，是现代模型压 KV cache 的标准结构；MQA 是极端情况（只留 1 组）。\n\n> 手感：估算任何服务显存 = 权重 + 上式 + 激活与框架开销。"
+    },
+    {
+      "h": "手写带 KV cache 的推理",
+      "md": "用最小实现把机制落到代码（单层注意力，忽略多头细节）：\n\n```python\nclass CachedAttention(nn.Module):\n    def __init__(self, d):\n        super().__init__()\n        self.q = nn.Linear(d, d)\n        self.k = nn.Linear(d, d)\n        self.v = nn.Linear(d, d)\n\n    def forward(self, x, cache=None):\n        q = self.q(x)              # x: (1, d) 单个新 token\n        k = self.k(x)\n        v = self.v(x)\n        if cache is not None:      # 拼接历史 KV\n            k = torch.cat([cache[0], k], dim=0)\n            v = torch.cat([cache[1], v], dim=0)\n        scores = q @ k.T / math.sqrt(d)\n        out = scores.softmax(-1) @ v\n        return out, (k, v)\n```\n\n要点：\n\n1. 每步返回新 cache、下一步再传入——这就是推理引擎 KV 管理的雏形\n2. 实际实现会把每层 K、V 存进预分配张量，避免每步 `cat` 拷贝\n3. decode 时 batch 维=1、序列维=1，矩阵乘退化成矩阵-向量乘——**算力大量闲置，瓶颈变成读取权重与 KV 的带宽**\n\n> 自测：写一个无 cache 的 O(L²) 版本对比，输出完全一致、时间差一个数量级，你就真懂了。"
+    },
+    {
+      "h": "工程视角：cache 的代价与对策",
+      "md": "KV cache 换来速度，代价是显存：4K 上下文的 7B 服务里，KV 常与权重同量级，直接决定**并发上限**。工业界的对策在后面几天逐一展开：\n\n- **管理**：PagedAttention（Day 114）消除碎片，把 KV 显存利用率从三成提到 96%+\n- **压缩**：KV cache 量化到 fp8/int8、GQA、sliding window（Mistral 只缓存最近 w 个 token 的 KV）\n- **复用**：prefix caching 让多个请求共享同一段系统提示的 KV\n- **绕开**：Mamba/SSM（Day 124）用固定大小状态替代 KV cache\n\n另一个关键认知：decode 每步都要**读完全部权重 + 全部 KV**，却只做极少计算——单请求解码速度 ≈ 显存带宽 ÷ 每步读取字节数。这解释了两件事：权重量化能近乎线性地提速解码；加 batch 几乎不拖慢单请求（权重只读一次，摊给多个请求）。"
+    }
+  ],
+  "keyPoints": [
+    "KV 显存 = 2 × layers × seq × batch × kv_heads × head_dim × bytes；Llama-2-7B fp16 每 token 512 KiB",
+    "prefill 计算密集、decode 访存密集——推理优化的两分法出发点",
+    "GQA/MQA 让多个 query 头共享 KV，是压缩 KV cache 的标准结构手段",
+    "decode 单请求速度 ≈ HBM 带宽 ÷ 每步读取字节数，量化因此能线性提速、batch 摊薄成本",
+    "手写实现核心：k/v 追加进 cache，每步只算新 token 的 q 并对全量 KV 做注意力"
+  ],
+  "quiz": [
+    {
+      "q": "Llama-2-7B（32 层、32 个 KV 头、head_dim=128、fp16）每个 token 的 KV cache 大约多大？",
+      "options": ["约 512 KiB", "约 1 MiB", "约 128 KiB", "约 4 MiB"],
+      "answer": 0,
+      "explain": "2（K 和 V）× 32 层 × 32 头 × 128 维 × 2 字节 = 524288 字节 = 512 KiB。128 KiB 是 GQA 8 头（Mistral 风格）的结果。"
+    },
+    {
+      "q": "batch=1 时该模型生成满 4096 token，KV cache 约占多少显存？",
+      "options": ["约 2 GiB", "约 512 MiB", "约 8 GiB", "约 13 GiB"],
+      "answer": 0,
+      "explain": "512 KiB × 4096 = 2 GiB。约 13 GiB 是 fp16 权重本身（7B × 2 字节）的大小，注意别混淆。"
+    },
+    {
+      "q": "为什么缓存的是 K、V，而不是每层的注意力输出？",
+      "options": ["新 token 的 q 需要与全部历史 K 计算分数、对 V 加权，而这些 K、V 不随步数变化", "注意力输出无法持久化", "只缓存 q 就足够", "K、V 是标量更省空间"],
+      "answer": 0,
+      "explain": "每一步变化的只有新 token 的 q；历史 K、V 决定了新 q 要查询的键值库，缓存它们即可避免重算整个前向。注意力输出依赖新 q，无法复用。"
+    },
+    {
+      "q": "把上述模型改为 8 个 KV 头（GQA），其余结构不变，每 token KV cache 变为？",
+      "options": ["原来的 1/4（约 128 KiB）", "不变", "原来的 1/2", "原来的 1/8"],
+      "answer": 0,
+      "explain": "KV cache 与 num_kv_heads 成正比：32 → 8 即 ÷4。这就是 Mistral-7B（GQA，128 KiB/token）4K 上下文 KV 只有 512 MiB 的原因。"
+    },
+    {
+      "q": "decode 阶段的主要瓶颈是？",
+      "options": ["显存带宽：每步要读全部权重和 KV，但计算量很小", "算力：矩阵乘太重", "磁盘 IO", "CPU 分词速度"],
+      "answer": 0,
+      "explain": "decode 时权重读取量固定而计算量极小，处于 roofline 的访存受限区。所以量化（减少读取字节）提速明显，而堆算力几乎无效。"
+    },
+    {
+      "q": "MQA（所有 query 头只共享 1 组 KV）的典型代价是？",
+      "options": ["模型质量有一定下降，换取更小的 KV cache", "推理完全无法并行", "训练成本翻倍", "必须重新训练 tokenizer"],
+      "answer": 0,
+      "explain": "MQA 是 GQA 的极端形式，KV cache 缩到 num_layers × head_dim × 2，但共享会损失表达能力，GQA 是质量与显存的折中。"
+    }
+  ]
+}

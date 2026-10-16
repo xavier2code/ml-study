@@ -1,0 +1,71 @@
+{
+  "day": 62,
+  "title": "Cross-Attention + Causal Mask",
+  "sections": [
+    {
+      "h": "注意力的两副面孔",
+      "md": "注意力按「问的人」和「被问的人」是否同源分两种：\n\n- **Self-attention**（昨天）：Q、K、V 同出一个序列——句内词与词互相理解\n- **Cross-attention**（今天上半场）：Q 来自序列 A，K、V 来自序列 B——A 的每个位置去 B 里检索信息\n\n昨天 Bahdanau 翻译其实就是 cross-attention：解码器（A）逐词向源句（B）查询。今天把它抽象成**一切条件生成**的标准接口：翻译（A=目标句，B=源句）、语音识别（A=转写，B=音频帧）、Stable Diffusion（A=图像块，B=文本提示）、VLM（A=文本 token，B=视觉特征）——「按 B 生成 A」的母题在 AI 里反复出现。"
+    },
+    {
+      "h": "Cross-Attention 的几何直觉",
+      "md": "实现与昨天的 MHA 只差几行——q 从另一个张量来：`q = wq(x_a)`，`k, v = wk(x_b), wv(x_b)`；拆头、缩放点积、softmax、乘 v 全部相同，输出长度 Tₐ。\n\n三个要点建立直觉：\n\n1. **注意力矩阵是矩形 (Tₐ×T_b)**：A 每个位置对 B 分配权重——「对齐」，与 Bahdanau 热力图一致\n2. **A、B 长度与维度都可不同**：W_K、W_V 把 B 投到 A 的语义空间——不同模态（音频帧数 ≠ 文本词数）可对接\n3. **信息单向**：A 被更新（输出长 Tₐ），B 原封不动当参考书被查\n\n术语：原论文翻译模型每层两个注意力块——self-attn + cross-attn（又叫 encoder-decoder attention）。GPT 只有 self-attn；T5/Whisper 两者都有。"
+    },
+    {
+      "h": "Causal Mask：不许偷看未来",
+      "md": "解决昨天埋的问题：self-attention 训练语言模型时，位置 t 能看到**整句**——包括 t+1，即答案。训练作弊、推理无答案，模型崩溃。\n\n解法惊人地简单：在 softmax **之前**把上三角（j > i）填 −∞：att = QKᵀ/√dk + M，M[i,j] = 0（j≤i）或 −∞（j>i）；softmax(−∞) = 0，未来权重归零——输出只依赖过去与现在，故称**因果**（causal）。可看的位置恰是**下三角**。\n\n妙在效率零损失：训练仍整句一次前向——mask 只是加常数矩阵，**T 个「不同长度前缀」同时并行训练**。对比 RNN 逐步串行，这是训练可扩展性的分水岭。代价是注意力变「单向」，BERT（双向理解）与 GPT（单向生成）分道扬镳。"
+    },
+    {
+      "h": "PyTorch 实现 masked self-attention（GPT 风格）",
+      "md": "在昨天的 MHA 基础上加三行：\n\n```python\ndef forward(self, x):\n    B, T, D = x.shape\n    q, k, v = [w(x).view(B, T, self.h, self.dk).transpose(1, 2)\n               for w in (self.wq, self.wk, self.wv)]\n    att = (q @ k.transpose(-2, -1)) / (self.dk ** 0.5)\n    # ↓ 因果掩码：上三角填 -inf ↓\n    mask = torch.triu(torch.full((T, T), float('-inf')), diagonal=1)\n    att = att.masked_fill(mask.bool(), float('-inf'))\n    att = att.softmax(-1)\n    out = (att @ v).transpose(1, 2).contiguous().view(B, T, D)\n    return self.wo(out), att\n```\n\n用字符级小数据训练两层小模型：embedding → MHA(masked) → 残差 + LayerNorm → head，几步即见 loss 下降。\n\n两个自检：① `att[0,0,3,:].sum()` ≈1 且 `att[0,0,3,4]` 严格为 0（概率不流向未来）；② 把 `diagonal=1` 改 `2`（多放行一个未来位）——作弊窗口一开，训练 loss 虚低但自回归生成立刻崩坏。\n\n另一点：GPT 推理用 KV cache——已生成 token 的 K、V 缓存复用，新 token 只算一列；可行性正来自「因果掩码保证历史注意力分布不变」，是生产级 LLM 推理标配。"
+    },
+    {
+      "h": "与 LLM 的关联：零件齐了",
+      "md": "本周八天连成完整生产线，终点恰是 GPT 全图：\n\n| 天 | 贡献的零件 |\n|---|---|\n| 57–58 RNN/LSTM | next-token 目标 + 序列建模问题意识 |\n| 59 Seq2Seq | Encoder-Decoder 条件生成骨架 |\n| 60 Bahdanau | softmax 加权检索的三步框架 |\n| 61 Self-Attn | O(1) 直达通信 + 多头 + 缩放 |\n| 62 今天 | cross-attn 条件接口 + causal mask + 并行训练 |\n\n明天最后一块拼图：**位置编码**——注意力对顺序无感，必须告诉模型「谁在前谁在后」。加上它，masked MHA 就能组成 nanoGPT 的 Transformer block。"
+    }
+  ],
+  "keyPoints": [
+    "Cross-attention：Q 来自序列 A，K/V 来自序列 B，注意力矩阵为 Tₐ×T_b 矩形，信息单向 B→A",
+    "条件生成标准接口：翻译、Whisper、Stable Diffusion、多模态 VLM 都是 cross-attention",
+    "Causal mask：softmax 前把上三角填 −∞，未来概率归零；训练仍可整句并行（T 个前缀同时学）",
+    "torch.triu(full(-inf), diagonal=1) + masked_fill 三行实现；掩码错误是 GPT 实现最常见 bug",
+    "因果性保证历史注意力不变 → KV cache 推理优化可行"
+  ],
+  "quiz": [
+    {
+      "q": "cross-attention 与 self-attention 的本质区别是？",
+      "options": ["打分函数不同", "Q 与 K/V 来源不同序列，注意力矩阵是 Tₐ×T_b 的矩形，信息从 B 单向流向 A", "不需要 softmax", "只能用于图像"],
+      "answer": 1,
+      "explain": "self 三者同源输出方阵；cross 中 A 的每个位置到 B 检索，输出长度等于 A 的长度，B 只被查询不被改写。"
+    },
+    {
+      "q": "Stable Diffusion 生成图像时用到 cross-attention，其 Q 与 K/V 分别来自？",
+      "options": ["都来自图像本身", "Q 来自图像块特征，K/V 来自文本提示编码", "Q 来自噪声，K/V 来自随机数", "不需要 Q"],
+      "answer": 1,
+      "explain": "「按文本条件生成图像」：生成过程（A=图像块）向条件（B=文本）查询，这正是 cross-attention 定义的条件生成模式。"
+    },
+    {
+      "q": "causal mask 应该施加在哪个环节？",
+      "options": ["softmax 之后把未来权重乘 0", "softmax 之前把上三角分数设为 −∞，经 softmax 后自然变 0", "损失函数里屏蔽未来位置的梯度", "输入端把未来 token 置零"],
+      "answer": 1,
+      "explain": "标准做法是 masked_fill −∞ 后再 softmax，−∞ 的指数为 0，权重严格归零且其余位置仍正确归一化；事后乘 0 会让行的和不再为 1。"
+    },
+    {
+      "q": "加了 causal mask 后，语言模型训练仍然可以整句一次前向计算，原因是？",
+      "options": ["mask 让计算量减半", "每个位置只依赖过去，一个 (T,T) 掩码让 T 个不同长度的前缀模型同时并行训练", "未来 token 在训练时被删除", "softmax 可以跳过"],
+      "answer": 1,
+      "explain": "一次前向的第 t 行输出恰是「只看前 t 个 token」的预测，mask 常数矩阵换来序列维全并行——与 RNN 串行逐步训练形成本质对比。"
+    },
+    {
+      "q": "如果实现时漏掉 causal mask，症状是？",
+      "options": ["训练更慢", "训练 loss 虚低但自回归生成完全崩坏（训练时偷看答案，推理时无答案可看）", "无法保存模型", "梯度爆炸为 NaN"],
+      "answer": 1,
+      "explain": "位置 t 能直接看到 t+1 的标签，损失轻松下降但学到的不是语言模型；推理时逐词生成没有未来信息，输出立刻劣化——最常见的 GPT 复现 bug。"
+    },
+    {
+      "q": "GPT 推理时 KV cache 之所以可行，依赖的因果性质是？",
+      "options": ["多头数量固定", "已有 token 的注意力分布不依赖新来的 token，历史 K、V 可缓存复用", "softmax 无状态", "词表大小不变"],
+      "answer": 1,
+      "explain": "mask 保证位置 i 永远不看 i 之后的内容，所以生成第 n 个词不会改变前 n−1 个词的注意力输出，缓存历史 K/V 即可，每步只算新 token 的一列。"
+    }
+  ]
+}

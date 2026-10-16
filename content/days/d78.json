@@ -1,0 +1,71 @@
+{
+  "day": 78,
+  "title": "Transformer Block 完整结构",
+  "sections": [
+    {
+      "h": "零件总装图",
+      "md": "一个 GPT 风格模型的骨架：**词嵌入 + 位置注入 → N × Block → 最终 LayerNorm → LM head**（投影到词表 + softmax）。Block 是唯一被堆叠的单元，内部两大子层：\n\n- **注意力**：token 间通信，跨位置混合信息（d71–d73）\n- **MLP**：逐位置计算，加工每个位置自己的信息；中间维度通常 4×d_model，激活 GELU（现代模型多用 SwiGLU）\n\n分工清晰：**注意力负责「交换」，MLP 负责「加工」**——通信与计算彻底分离，这正是 Transformer 可并行、可堆叠的结构基础。"
+    },
+    {
+      "h": "Pre-norm vs Post-norm",
+      "md": "残差连接 x + F(x) 让梯度绕过子层直达底层，但 LayerNorm 放在哪里是个分水岭：\n\n```\nPost-norm:  x = LayerNorm(x + F(x))     # 原始 Transformer\nPre-norm:   x = x + LayerNorm(F(x))      # GPT-2 起的惯例\n```\n\n**Post-norm** 在每次相加后立即归一化，残差主干被反复缩放——梯度通路上每层都要过一道「关卡」，几十层就很难训，需要 learning-rate warmup 精细呵护。\n\n**Pre-norm** 把归一化挪进分支：主干上只剩加法，梯度可以**无衰减地流到任意层**，训练稳定性大幅提升。代价是主干数值无约束地增长，所以最后必须补一个 **final LayerNorm** 再接 LM head。经验法则：上规模、上深度，必用 pre-norm。"
+    },
+    {
+      "h": "残差流视角：一条公共总线",
+      "md": "把 x 想象成一条**公共总线**（residual stream）：每个 Block 的注意力「读」总线、把增量「写」回总线；MLP 再读、再写。层与层之间从不直接调用对方，一切信息交换都经由总线。\n\n这个视角（机制可解释性的常用语言）能解释三件事：\n\n- 为什么剪掉个别层模型常常「还凑合」——总线上的信息有冗余\n- 为什么信息可以在浅层写入、深层才取出（ induction head 的组合）\n- 为什么 pre-norm 的「主干不动」至关重要——总线被改写时不能被归一化破坏累积的痕迹"
+    },
+    {
+      "h": "PyTorch 实现完整 Block",
+      "md": "```python\nimport torch, torch.nn as nn\n\nclass Block(nn.Module):\n    def __init__(self, d_model=512, n_head=8):\n        super().__init__()\n        self.ln1  = nn.LayerNorm(d_model)\n        self.attn = MultiHeadAttention(d_model, n_head)  # d72 的实现\n        self.ln2  = nn.LayerNorm(d_model)\n        self.mlp  = nn.Sequential(\n            nn.Linear(d_model, 4 * d_model),\n            nn.GELU(),\n            nn.Linear(4 * d_model, d_model),\n        )\n    def forward(self, x):\n        x = x + self.attn(self.ln1(x))   # pre-norm：先归一再进子层\n        x = x + self.mlp(self.ln2(x))\n        return x\n\nclass TinyGPT(nn.Module):\n    def __init__(self, vocab, d_model=512, n_head=8, n_layer=6):\n        super().__init__()\n        self.tok = nn.Embedding(vocab, d_model)\n        self.blocks = nn.ModuleList(\n            Block(d_model, n_head) for _ in range(n_layer))\n        self.ln_f = nn.LayerNorm(d_model)   # final norm 必不可少\n        self.head = nn.Linear(d_model, vocab, bias=False)\n```\n\n本周最好的作业：把这份代码与 nanoGPT 逐行对照——每个张量形状、每个归一化位置都对得上，说明 d71–d78 真正打通了。"
+    },
+    {
+      "h": "与 LLM 的关联：深度与参数分布",
+      "md": "堆叠规模：GPT-2 small 12 层 → GPT-2 XL 48 层 → GPT-3 **96 层**——pre-norm 让这种深度成为可能。\n\n参数分布常被忽略但值得记住：每个 Block 里 MLP 约占 8·d_model²（两个矩阵、4× 扩张），注意力约占 4·d_model²——**约 2/3 的参数在 MLP**。所以「Transformer 就是注意力」这个流行说法并不准确：注意力负责路由，容量大头其实在逐位置的 MLP。\n\n现代变体：parallel block（注意力与 MLP 并行相加，训练更快）、Sandwich norm、QK-norm（深模型稳定性）。至此全部零件就位——从 d79 起话题转向「怎么把它训出来」。"
+    }
+  ],
+  "keyPoints": [
+    "Block = 注意力（跨位置通信）+ MLP（逐位置计算），通信与计算分离",
+    "Post-norm 深层难训需 warmup；pre-norm 残差主干畅通、梯度无衰减直达底层",
+    "pre-norm 必须补 final LayerNorm，否则主干数值无约束直接进 LM head",
+    "残差流 = 公共总线：各层读写增量，层间不直接对话",
+    "参数大头在 MLP（约 8d² vs 注意力 4d²，占 2/3）；GPT-3 堆到 96 层"
+  ],
+  "quiz": [
+    {
+      "q": "Block 内注意力子层与 MLP 子层的分工是？",
+      "options": ["两个都在跨位置混合信息", "注意力跨位置通信，MLP 逐位置计算——交换与加工分离", "MLP 负责位置编码，注意力负责激活函数", "二者功能完全等价，可互换"],
+      "answer": 1,
+      "explain": "注意力移动信息（谁的内容流向谁），MLP 变换信息（每个位置独立过 4× 升维网络）；职责正交。"
+    },
+    {
+      "q": "Pre-norm 相比 Post-norm 的核心优势？",
+      "options": ["参数量更少", "残差主干上只有加法，梯度无衰减直达底层，深层训练稳定", "推理速度快一倍", "不再需要激活函数"],
+      "answer": 1,
+      "explain": "Post-norm 每层相加后立即归一化，主干被反复缩放；pre-norm 把 LN 挪进分支，主干成为梯度高速公路。"
+    },
+    {
+      "q": "Pre-norm 结构为什么最后还要一个 final LayerNorm？",
+      "options": ["为了和词表维度对齐", "残差主干数值从未被归一化、逐层累积增长，进 LM head 前必须归一", "防止过拟合", "仅为代码风格统一"],
+      "answer": 1,
+      "explain": "pre-norm 的代价就是主干无约束增长；不加 final norm，输出尺度过大且不稳， logits 失真。"
+    },
+    {
+      "q": "残差流（residual stream）视角中，层与层如何交换信息？",
+      "options": ["每层直接调用上一层的中间结果", "通过公共总线 x 读写增量，层与层不直接对话", "通过位置编码传递", "各层完全独立无需交换"],
+      "answer": 1,
+      "explain": "注意力与 MLP 都是对总线的「读—改—写」；这解释了剪层冗余性与跨层信息组合（如 induction head）。"
+    },
+    {
+      "q": "一个标准 Block 里，参数量的大头在？",
+      "options": ["注意力（约 4d²）", "MLP（约 8d²，占约 2/3）", "LayerNorm", "位置编码"],
+      "answer": 1,
+      "explain": "MLP 两个矩阵共 2×(d×4d) = 8d²，注意力 Q/K/V/O 共 4d²；「Transformer=注意力」的说法低估了 MLP 的容量占比。"
+    },
+    {
+      "q": "GPT-3 能堆到 96 层而原始 Transformer 很难，主要归功于什么结构选择？",
+      "options": ["更大的词表", "pre-norm 残差带来的训练稳定性", "使用了更大的 batch size", "去掉了 MLP"],
+      "answer": 1,
+      "explain": "深度上去后 post-norm 的梯度问题指数放大；pre-norm 让百层规模的端到端训练第一次变得工程可行。"
+    }
+  ]
+}

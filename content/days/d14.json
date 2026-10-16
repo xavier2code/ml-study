@@ -1,0 +1,71 @@
+{
+  "day": 14,
+  "title": "完整 Titanic 项目",
+  "sections": [
+    {
+      "h": "从跑通模型到完整项目",
+      "md": "前三天你有了逻辑回归、随机森林、XGBoost 三个候选。今天的目标不是刷分，而是走完**数据科学的完整闭环**：明确问题 → 特征工程 → 多模型对比 → 结果解读 → 对外表达（README + blog）。\n\n> Kaggle 的隐藏价值不在名次，而在于它逼你面对真实数据的脏乱：缺失、泄漏、类别不平衡、随机性。这些坑在面试和工作里反复出现。\n\n**项目结构建议**：\n\n```\ntitanic/\n├── data/train.csv  test.csv\n├── notebooks/explore.ipynb     # 探索，允许混乱\n├── src/features.py             # 特征工程函数化\n├── src/train.py                # 训练与对比\n└── README.md                   # 结论先行\n```"
+    },
+    {
+      "h": "特征工程：分数的大头在这",
+      "md": "Titanic 上调模型参数通常 ±0.005，好特征能 +0.02 以上。逐个看：\n\n```python\ndef add_features(df):\n    df['FamilySize'] = df['SibSp'] + df['Parch'] + 1\n    df['IsAlone'] = (df['FamilySize'] == 1).astype(int)\n    df['Title'] = df['Name'].str.extract(r' ([A-Za-z]+)\\.')[0]\n    df['Title'] = df['Title'].map(lambda t: t if t in\n        ['Mr','Miss','Mrs','Master'] else 'Rare')\n    df['FareBin'] = pd.qcut(df['Fare'], 4, labels=False)\n    df['AgeBin'] = pd.cut(df['Age'].fillna(df['Age'].median()),\n                          [0,12,18,35,60,100], labels=False)\n    return df\n```\n\n**为什么有效**：\n\n- **Title**（Mr/Miss/Master...）：浓缩了性别、年龄、社会地位三重信息——Master（男孩）生还率远高于 Mr\n- **IsAlone**：独自一人生还率显著低，家庭规模是社交资本\n- **分箱**：把连续值切段，帮助树模型更快找到切分点、缓解噪声\n\n> 关键纪律：特征工程必须**只用训练集统计量**填缺失/分桶——写进同一个函数、放进 Pipeline，绝不能先在全量数据上 fit 再 split（数据泄漏会让本地分数虚高，上线翻车）。"
+    },
+    {
+      "h": "系统对比三个模型",
+      "md": "统一协议下对比（同一份划分、同一套特征）：\n\n```python\nmodels = {\n  'LR':  LogisticRegression(max_iter=1000, C=1.0),\n  'RF':  RandomForestClassifier(n_estimators=500, min_samples_leaf=2,\n                                 random_state=42),\n  'XGB': XGBClassifier(n_estimators=400, learning_rate=0.05,\n                       max_depth=4, subsample=0.8, early_stopping_rounds=30)\n}\nfor name, m in models.items():\n    scores = cross_val_score(pipe_of(m), X, y, cv=5)\n    print(f'{name}: {scores.mean():.4f} ± {scores.mean():.4f}')\n```\n\n**典型量级**（有无 Title/FamilySize 特征影响很大，仅供参照）：\n\n| 模型 | 5 折 CV | 418 行测试集 |\n|---|---|---|\n| LR | ≈0.79–0.81 | ≈0.75–0.78 |\n| RF | ≈0.80–0.82 | ≈0.76–0.79 |\n| XGB | ≈0.82–0.84 | ≈0.78–0.80 |\n\n注意测试集分普遍低于 CV——418 行的抽样波动 + 不可见的分布差异。**看分数更看方差**：如果某模型 CV 折间方差巨大，说明它对数据划分敏感，实战风险高。"
+    },
+    {
+      "h": "为什么最终选 XGBoost（写进 blog 的论证）",
+      "md": "「分数最高」是最弱的理由，blog 里要写出更强的论证链：\n\n1. **性能稳健性**：XGB 在 5 折 CV 上的均值领先且折间方差不大——优势不是单次划分的运气\n2. **内置正则与早停**：小样本（891 行）上自动控制复杂度，调参面小、不易翻车；RF 需要手工压树深/叶样本\n3. **缺失值原生处理**：Age 缺 20%，XGB 学到的默认方向比统一填中位数损失更少信息\n4. **可解释性够用**：`feature_importance_plot` 显示 Title、Sex、FareBin 靠前，与历史事实（妇女儿童优先、阶级差异）一致——模型学到的不是伪相关\n5. **权衡声明**：若要「一页纸向业务方解释」，LR 的系数表更直白；要极速训练，LR 也够。选 XGB 是在「分数 + 稳健 + 工程成熟」三角里的综合取舍\n\n> 这套「不只看分数」的论证方式比结果本身更值钱——面试中被问「为什么选这个模型」时，这就是标准答案模板。"
+    },
+    {
+      "h": "README 骨架 + 今日串联",
+      "md": "README 模板（结论先行）：\n\n```\n# Titanic 生还预测\n结论：XGBoost，5 折 CV 0.83，Kaggle LB 0.79（前 x%）\n## 数据洞察（3 张图：生还率×性别/舱位/年龄）\n## 特征工程（Title 提取、FamilySize、分箱；为何有效各一句话）\n## 模型对比（表格 + CV 方差）\n## 关键决策与放弃项（如何处理 Cabin、为何不做深度模型）\n## 复现（pip install -r requirements.txt && python src/train.py）\n```\n\n**与 Agent 的关联**：这个闭环就是未来 Agent 项目的骨架——「探索 → 特征 → 实验 → 对比 → 报告」替换成「工具调用 → 观察 → 迭代 → 评估」。README 思维 = 给未来的自己（和自动化系统）留下可复现的说明，Agent 的记忆系统（写操作日志、状态摘要）干的是同一件事。\n\n今日串联：Phase 1 的完整闭环落地。明天引入交叉验证 + 网格搜索，把今天「手动调参」升级为系统化方法——那也是对抗 418 行测试集抖动的正解。\n\n动手清单：完成特征工程并提交 Kaggle；写 README；blog 草稿 500 字。"
+    }
+  ],
+  "keyPoints": [
+    "特征工程收益（+0.02 级）通常大于调模型参数（±0.005 级）：Title、FamilySize 是 Titanic 利器",
+    "Title 从 Name 提取，浓缩性别+年龄+社会地位；IsAlone 捕捉社交资本效应",
+    "防数据泄漏纪律：填缺失/分箱只用训练集统计量，写进 Pipeline",
+    "模型对比要报 CV 均值±方差，测试集分低于 CV 是正常现象（418 行抽样波动）",
+    "选型论证链：CV 稳健性 + 内置正则早停 + 缺失值原生处理 + 解释与史实一致，分数只是其一"
+  ],
+  "quiz": [
+    {
+      "q": "Titanic 上把模型从 LR 换成调优后的 XGB，与加入 Title/FamilySize 特征相比，通常哪个收益更大？",
+      "options": ["换模型收益通常更大", "好特征工程的收益通常更大（+0.02 vs ±0.005 量级）", "两者一样", "都不重要，看运气"],
+      "answer": 1,
+      "explain": "表格数据上特征质量常常主导最终分数；模型切换在基线合理后通常是百分之零点几的微调。"
+    },
+    {
+      "q": "以下哪种做法构成数据泄漏？",
+      "options": ["在训练集上 fit 填补器，再 transform 测试集", "先在全量数据上算中位数填缺失、再划分训练/测试", "对训练集做 5 折交叉验证", "用 Pipeline 串联预处理和模型"],
+      "answer": 1,
+      "explain": "全量统计量含测试集信息，会以有利方式「渗透」进模型，本地分数虚高，换到真未知数据立刻回落。"
+    },
+    {
+      "q": "为什么 Title（Mr/Miss/Master...）是个强特征？",
+      "options": ["因为字符串更长", "一个字段浓缩了性别、年龄段和社会地位三重信号", "因为它是唯一没有缺失的特征", "因为树模型喜欢文本"],
+      "answer": 1,
+      "explain": "Master 专指男孩——同时编码了「男性」和「儿童」，而儿童优先原则使其生还率远高于 Mr，信息密度极高。"
+    },
+    {
+      "q": "blog 里论证「为什么选 XGBoost」，以下最有力的是？",
+      "options": ["因为它名字里有 Extreme", "因为它在 5 折 CV 上均值领先且折间方差小，缺失值原生处理，特征重要性与史实一致", "因为它训练速度一定最快", "因为深度学习已经过时"],
+      "answer": 1,
+      "explain": "稳健性（不是单次划分运气）+ 小样本适配 + 可验证的合理性，构成完整论证链；单纯分数最高是最弱理由。"
+    },
+    {
+      "q": "模型对比时为什么要报告 CV 的「均值±方差」而不是单次划分的分数？",
+      "options": ["让表格更好看", "单次划分受抽样影响大，方差大说明模型对数据敏感、实战风险高", "方差是精度的另一种写法", "因为 sklearn 要求必须报"],
+      "answer": 1,
+      "explain": "891 行的小数据集上单次 train_test_split 的结果抖动可达 ±0.02；CV 折间方差同时暴露了模型稳定性信息。"
+    },
+    {
+      "q": "Titanic 项目的「探索→特征→对比→报告」闭环与 Agent 开发的对应关系是？",
+      "options": ["没有对应关系", "对应「工具调用→观察→迭代→评估」的通用实验循环", "对应模型参数初始化", "对应数据库索引设计"],
+      "answer": 1,
+      "explain": "两者共享同一元方法：假设→实验→测量→复盘→表达；Agent 项目把实验对象换成交互轨迹与工具策略。"
+    }
+  ]
+}

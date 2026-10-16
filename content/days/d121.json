@@ -1,0 +1,72 @@
+{
+  "day": 121,
+  "title": "FlashAttention 3 / 4 概览",
+  "sections": [
+    {
+      "h": "FA2 到了 H100 为什么不够用",
+      "md": "FA3 论文的开场数字很扎心：FA2 在 Hopper（H100）上的利用率只有 **35% 左右**——不是 FA2 退步了，而是新硬件的新特性它没用上：\n\n- **TMA（Tensor Memory Accelerator）**：异步批量搬运数据，CPU/warp 不用亲自盯拷贝\n- **WGMMA**：warp group 级矩阵乘指令，比传统 MMA 吞吐更高\n- **FP8**：Hopper 原生支持，吞吐约为 BF16 的 2×\n\nFA2 是为 Ampere 设计的同步风格代码：拷数据、算、再拷下一块，硬件的新「异步肌肉」全在闲置。FA3 的命题就是：怎么把这些异步能力吃干净。"
+    },
+    {
+      "h": "FA3 的三大招",
+      "md": "**1. warp specialization（生产者-消费者）**：一部分 warp 专职用 TMA 搬 K/V 块（生产者），另一部分专职 WGMMA 计算（消费者），拷贝与计算真正重叠——不再是「搬完再算」的串行。\n\n**2. pingpong 调度**：两个 warp group 交替执行 softmax 与 GEMM——A 组做 softmax 时 B 组做 GEMM，GEMM 不再干等 softmax。论文声称 softmax 等待时间被大幅消除，BF16 下约为 FA2 的 **1.5–2×**。\n\n**3. FP8 支持**：直接套 FP8 会掉精度，FA3 用**块级量化**（per-block scale）+ incoherent processing（随机旋转打散离群值）控制误差，FP8 吞吐接近 BF16 的 2×，声称 H100 上超过 740 TFLOPS、利用率 75%+。\n\n三招的共同思想：从「算得少搬得少」升级到「**永远有活可干**」——异步流水线榨满硬件。"
+    },
+    {
+      "h": "FA4 摘要阅读",
+      "md": "FA4（2025）标题就很有性格：「Beat the Past to Master the Present」——不等新硬件，把现有 Hopper 的 FP8 流水线榨到极限。摘要级了解两个亮点：\n\n- **重新分解 FP8 attention**：softmax 与 scale/乘法操作融合重组，喂满连续的 FP8 GEMM 流水线，消除小算子气泡\n- **two-directional pipelining**：观察到 attention 输出经残差连接后进入的下一层 MLP 与本层收尾无关——把本层 epilogue 与后续计算重叠调度，隐藏收尾延迟\n\n论文声称比 FA3 FP8 再快 ≈1.4×，MFU 提升到 70% 上下。**读法提示**：这类论文抓三样就够——摘要的加速声明、图 1 的流水线示意、主性能表；实现细节（寄存器分配级别）初读不必啃。"
+    },
+    {
+      "h": "FA1/2/3/4 对比表",
+      "md": "| 版本 | 年份/硬件 | 精度 | 核心技术 | 相对速度（论文口径） |\n|---|---|---|---|---|\n| FA1 | 2022 Ampere | FP16/BF16 | tiling + online softmax，N×N 不落地 | 基准 1× |\n| FA2 | 2023 Ampere+ | FP16/BF16 | 序列维并行、warp 分工、减非 matmul FLOPs | ≈2× FA1 |\n| FA3 | 2024 Hopper | BF16 + FP8 | warp specialization、pingpong、块级 FP8 | BF16 ≈1.5–2× FA2；FP8 再近 2× |\n| FA4 | 2025 Hopper | FP8 | FP8 流水线重分解、双向重叠 | ≈1.4× FA3 FP8 |\n\n显存方面四代一脉相承：都是 O(N)、N×N 不落地；差距全在**速度与硬件利用率**。注意这些都是论文自称的相对数字，不同 N、causal 设置、batch 下实测会打折扣——自己 benchmark 才算数。"
+    },
+    {
+      "h": "工程视角与串联",
+      "md": "实际项目怎么用：\n\n- **PyTorch 用户**：`F.scaled_dot_product_attention` 会按硬件自动挑后端（A 卡走 FA2、H 卡新版本已接 FA3 内核）；显式控制可用 `torch.nn.attention.sdpa_kernel`\n- **训练框架**：flash-attn 包要与 CUDA / GPU 架构版本对齐，H100 上值得追新版本吃 FP8 红利\n- **Ampere 及以下老卡**：FA2 就是终点，FA3/4 的收益与你无关——**优化是跟着硬件代际走的**\n\n对 Agent 的意义照旧是长上下文的成本曲线：FP8 attention 直接把几十 K 上下文的 prefill 时间再砍近半。另一个工程直觉：attention 优化卷到今天，「换更快的 attention」的边际收益已小，长上下文的下一个战场在位置编码与稀疏/线性结构——正是接下来三天的主题。"
+    }
+  ],
+  "keyPoints": [
+    "FA2 在 Hopper 上利用率仅 ≈35%：TMA 异步拷贝、WGMMA、FP8 三大硬件特性未被利用",
+    "FA3 三招：warp specialization（生产者-消费者）、pingpong 调度（softmax 与 GEMM 重叠）、块级 FP8 量化",
+    "FA3 论文口径：BF16 约 1.5–2× FA2，FP8 再近 2×，H100 利用率 75%+",
+    "FA4：不等新硬件，重分解 FP8 流水线 + 双向重叠（借残差连接与下一层解耦），≈1.4× FA3 FP8",
+    "四代显存特性一致（O(N)），差距全在速度；论文数字需自 benchmark 验证",
+    "优化跟着硬件代际走：老卡到 FA2 为止"
+  ],
+  "quiz": [
+    {
+      "q": "FA3 论文指出 FA2 在 H100 上利用率低（≈35%）的根因是？",
+      "options": ["FA2 数学复杂度太高", "Hopper 的新特性（TMA 异步拷贝、WGMMA、FP8）FA2 都没用上，同步式代码让新硬件闲置", "H100 显存太慢", "softmax 精度不够"],
+      "answer": 1,
+      "explain": "FA2 为 Ampere 的同步执行风格设计，而 Hopper 的算力藏在异步流水线与 FP8 里，不用等于白买。"
+    },
+    {
+      "q": "pingpong 调度的作用是？",
+      "options": ["提高数值精度", "两个 warp group 交替执行 softmax 与 GEMM，让矩阵乘不再等 softmax", "降低显存", "增大 batch"],
+      "answer": 1,
+      "explain": "softmax 是非 matmul 操作会打断 GEMM 流水，两组乒乓交替使任一时刻都有 GEMM 在跑，消除等待。"
+    },
+    {
+      "q": "FA3 的 FP8 为什么不怕掉精度？",
+      "options": ["FP8 本身无损", "块级量化（per-block scale）+ incoherent processing 打散离群值，控制误差", "只在 attention 的 Q 上用 FP8", "靠事后纠错"],
+      "answer": 1,
+      "explain": "FP8 动态范围窄，直接用误差大；按块缩放并随机旋转让离群值不集中破坏量化，即可接近 BF16 精度。"
+    },
+    {
+      "q": "FA4 的 two-directional pipelining 利用的观察是？",
+      "options": ["attention 输出经残差连接后与下一层计算的依赖关系可解耦，收尾工作可与后续计算重叠", "GPU 有两个方向", "矩阵乘可以反着算", "KV cache 可以倒序读"],
+      "answer": 0,
+      "explain": "利用残差连接的结构特点把本层 epilogue 与不依赖它的后续计算重叠调度，隐藏尾部延迟，榨满流水线。"
+    },
+    {
+      "q": "你在 A100 集群上训练，追 FA4 的意义？",
+      "options": ["收益显著", "基本无意义——FA4 是 Hopper FP8 流水线优化，Ampere 卡上 FA2 已是该代际的优化终点", "能省一半显存", "能翻倍 batch"],
+      "answer": 1,
+      "explain": "FA3/4 的技术建立在 Hopper 专属指令与 FP8 上；优化与硬件代际绑定，跨代际不迁移。"
+    },
+    {
+      "q": "四代 FlashAttention 中保持不变的是？",
+      "options": ["速度", "显存策略：N×N 不落地、O(N) 显存，这一算法内核四代一脉相承", "并行方式", "精度格式"],
+      "answer": 1,
+      "explain": "从 FA1 到 FA4，tiling + online softmax 的不物化内核未变，演进的是并行调度、精度格式与硬件利用。"
+    }
+  ]
+}

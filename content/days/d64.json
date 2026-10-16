@@ -1,0 +1,66 @@
+{
+  "day": 64,
+  "title": "整合项目：图像分类 end-to-end",
+  "sections": [
+    {
+      "h": "整合日：把 Phase 2 的零件装成一台整机",
+      "md": "过去几周你分别练过：数据增强、学习率调度、ResNet 结构、混合精度、训练循环。今天把它们装进**同一个工程模板**，跑一个完整的 ResNet-50 on CIFAR-100——这是求职作品集里最典型的「我会训模型」证明。\n\n为什么强调「通用模板」：研究者的生产力差距往往不在模型结构，而在是否有一套**改三个参数就能换数据集/换模型**的训练脚手架。今天写的模板在 Phase 3 会直接复用于 Transformer 训练，在日后每个 idea 的快速验证中都会反复用到。"
+    },
+    {
+      "h": "训练配方：ResNet-50 on CIFAR-100",
+      "md": "CIFAR-100 是比 CIFAR-10 难一档的基准：100 类、每类仅 600 张（500 训练 + 100 测试），32×32 小图。**小图 + 类多是数据增强的天然考场**。参考配方：\n\n```python\nmodel = resnet50(num_classes=100)          # 换模型只改这行\n# CIFAR 版 ResNet 建议：首层 3×3 conv 替换 7×7，去掉 maxpool——32×32 图经不起 4 倍下采样两次\n\ntfm_train = T.Compose([\n    T.RandomCrop(32, padding=4),\n    T.RandomHorizontalFlip(),\n    T.RandAugment(num_ops=2, magnitude=10),\n    T.ToTensor(),\n    T.Normalize(mean, std),\n])\noptim = torch.optim.SGD(params, lr=0.1, momentum=0.9,\n                         weight_decay=5e-4, nesterov=True)\nsched = OneCycleLR(optim, max_lr=0.1, total_steps=epochs*len(loader))\namp  = torch.amp.autocast('cuda')\n```\n\n预期结果：200 epoch 下 top-1 约 78–82%。**先跑 10 epoch 确认 loss 正常下降再放长训**，不要浪费三小时后才发现一处 bug。"
+    },
+    {
+      "h": "wandb：实验的飞行记录仪",
+      "md": "调参不记录 = 白调。wandb 的最小集成只需四行：\n\n```python\nimport wandb\nwandb.init(project='cifar100', config=cfg)      # cfg 存全部超参\nwandb.watch(model, log='all', log_freq=100)      # 可选：记录梯度/权重直方图\nwandb.log({'train/loss': loss.item(), ...}, step=step)\nwandb.finish()\n```\n\n**要记录什么**：不止 train loss 和 val acc——还有**学习率曲线**（对照调度器是否生效）、**梯度范数**（爆炸/消失的最早信号）、**每类的混淆矩阵**（找出最弱的 5 类，往往就是下一步数据增强的方向）。\n\n工作流习惯：每次实验起一个能自解释的 run 名（如 `r50-randaug-wd5e4-oc`），把 config 全量交给 wandb 管理，**代码里不写死任何魔法数字**。三个月后回看时，图表比记忆可靠。"
+    },
+    {
+      "h": "checkpoint 管理：可恢复、可选择、不占爆磁盘",
+      "md": "长训练必须假设它会被中断。规范的 checkpoint 应保存**恢复训练所需的一切**：\n\n```python\ntorch.save({\n    'epoch': epoch,\n    'model': model.state_dict(),\n    'optim': optim.state_dict(),\n    'sched': sched.state_dict(),\n    'amp':   amp_scaler.state_dict(),\n    'best_acc': best_acc,\n    'config': cfg_dict,\n}, f'ckpt/epoch{epoch:03d}.pt')\n```\n\n三条纪律：\n\n1. **last + best 双备份**：best 按验证集指标更新，last 每个 epoch 覆盖，断点续训用 last\n2. **保留策略**：只留最近 3 个 + best 一个，其余删除——否则一张 A100 几天就塞满\n3. **保存 config 快照**：恢复时不依赖当时的命令行参数，checkpoint 自带全部上下文\n\n> 自检：删掉训练脚本，只凭 checkpoint 里的内容，你能恢复训练到和中断前完全一致的状态吗（包括调度器位置）？"
+    },
+    {
+      "h": "与 LLM 的关联：这就是预训练流程的微缩版",
+      "md": "把今天的流程放大一万倍就是 GPT 预训练：数据管道（清洗、增强 → 去重、tokenize）、模型（ResNet-50 → Transformer）、优化器（SGD+OneCycle → AdamW+cosine+warmup）、记录、checkpoint。所有大厂训练平台的核心功能也就是今天这套东西的工程化：断点续训、超参快照、指标看板。\n\n对 Agent 而言，**可复现的实验管理**是自动化的前提——AutoML 和自动调参 agent 靠的正是结构化的 wandb 记录来决定下一个实验。你今天建立的记录纪律，就是明天让机器替你做实验的地基。"
+    }
+  ],
+  "keyPoints": [
+    "通用训练模板的价值：改三行换数据集/模型，idea 快速验证的基础设施",
+    "CIFAR-100 难点：100 类 × 每类仅 600 张，随机裁剪/翻转 + RandAugment 是标配",
+    "CIFAR 版 ResNet 改造：首层换 3×3 conv、去 maxpool，避免小图过度下采样",
+    "优化配方：SGD + momentum 0.9 + weight_decay 5e-4 + OneCycleLR，配合 AMP 混合精度",
+    "wandb 必记：loss/acc 之外还有 lr 曲线、梯度范数、混淆矩阵",
+    "checkpoint 三纪律：last+best 双备份、限量保留、自带 config 快照"
+  ],
+  "quiz": [
+    {
+      "q": "在 32×32 的 CIFAR 图上直接用 ImageNet 版 ResNet-50（7×7 首层 + maxpool），最可能出现什么问题？",
+      "options": ["参数量爆炸放不进显存", "特征图过早缩到 1×1，空间信息丢失，精度明显下降", "无法反向传播", "类别数对不上"],
+      "answer": 1,
+      "explain": "ImageNet 假设 224×224 输入：7×7 conv + maxpool 先下采样 4 倍，32×32 图很快只剩 1~2 像素，细节尽失。CIFAR 惯例是换 3×3 首层并去掉 maxpool。"
+    },
+    {
+      "q": "以下哪个不是规范 checkpoint 必须包含的内容？",
+      "options": ["优化器 state_dict", "学习率调度器 state_dict", "训练日志的打印格式设置", "模型权重"],
+      "answer": 2,
+      "explain": "断点续训需要模型+优化器+调度器（+AMP scaler）的状态才能精确恢复；日志格式不影响数学状态。"
+    },
+    {
+      "q": "为什么建议在 wandb 里记录梯度范数（grad norm）？",
+      "options": ["让图表更好看", "它是梯度爆炸/消失的最早信号，可在 loss 崩溃前预警", "wandb 强制要求", "可以替代记录 loss"],
+      "answer": 1,
+      "explain": "梯度范数突增往往先于 loss 发散出现，配合梯度裁剪阈值（如 clip 1.0）还能判断裁剪是否过于频繁地触发。"
+    },
+    {
+      "q": "「先跑 10 epoch 确认正常再放 200 epoch 长训」的核心理念是？",
+      "options": ["省电", "快速反馈，尽早暴露管道 bug，避免长时间训练后才发现错误", "10 epoch 的模型更好", "绕过学习率调度"],
+      "answer": 1,
+      "explain": "集成多个组件后 bug 概率叠加；短程冒烟测试（smoke test）用几分钟换掉几小时的风险，是工程上的期望值最优。"
+    },
+    {
+      "q": "今天的训练流程与 GPT 预训练的对应关系，哪一项是正确的？",
+      "options": ["数据增强对应数据去重与 tokenize，都属数据管道工程", "SGD 对应 GPT 里的强化学习", "checkpoint 管理在 LLM 预训练中不需要", "wandb 在大厂训练平台中没有对应物"],
+      "answer": 0,
+      "explain": "两者共享同一骨架：数据管道、模型、优化器、指标看板、断点续训。LLM 规模大一万倍，但这些环节一一对应，且大厂平台正是这套纪律的工程化。"
+    }
+  ]
+}

@@ -1,0 +1,67 @@
+{
+  "day": 114,
+  "title": "PagedAttention (vLLM) 原理",
+  "sections": [
+    {
+      "h": "vLLM 论文要解决什么",
+      "md": "vLLM 的 SOSP 2023 论文《Efficient Memory Management for Large Language Model Serving with PagedAttention》瞄准一个被忽视的问题：**KV cache 的显存浪费**。\n\n当时的主流系统为每个请求按 max_len **预留一段连续显存**，这带来两种浪费：\n\n- **内部碎片**：预留 2048 个 token 的空间，实际生成 200 个就结束\n- **外部碎片**：预留了未填满的空间，由于必须连续，无法挪给别的请求\n\n论文实测：**60–80% 的 KV cache 显存被浪费**。显存利用率低 → 能同时驻留的序列少 → 并发与吞吐双双塌方。此外 beam search、并行采样的多条候选各存一份完全相同的前缀 KV，重复存储。\n\n> 读论文时先问自己：KV cache 为什么必须连续？答案是不必须——这就是 PagedAttention 的突破口。"
+    },
+    {
+      "h": "虚拟内存 + 页表类比",
+      "md": "操作系统从不要求进程的地址空间连续落在物理内存里——用**分页 + 页表**解耦逻辑与物理。PagedAttention 把同一套思想搬进 KV cache：\n\n- KV cache 切成固定大小的 **block**（GPU 上默认 16 个 token）\n- 每个序列一张 **block table**：逻辑块号 → 物理块号\n- 物理块**按需分配**：序列写到块边界才申请下一块\n- 序列结束后物理块立刻归还池子，供其他请求复用\n\n效果：碎片只剩每个序列最后一块的零头，**浪费 <4%**（对比 60–80%）。\n\n代价在 kernel：序列的 KV 在显存里不再连续，注意力核必须能**按块表 gather K/V 分块计算**——PagedAttention kernel 正是为此写的分块注意力实现。显存吃紧时还可以把块 swap 到 CPU 内存再换回，或直接丢弃重算（preemption）。"
+    },
+    {
+      "h": "页式管理顺带解锁的三个能力",
+      "md": "把 KV 变成按块管理的资源后，三个高价值功能几乎是免费送来的：\n\n1. **写时复制（copy-on-write）**：并行采样 / beam search 的多条候选共享同一份 prompt 物理块，直到第一个分歧 token 才复制块——重复前缀只存一份\n2. **prefix caching**：不同请求只要系统提示相同，就能复用已算好的物理块，prefill 几乎免算，TTFT 大幅下降\n3. **抢占与重算**：显存不足时逐出低优先级序列，稍后用保存的块恢复或从头重算\n\n这三个能力在连续预留的方案里根本无法实现——**数据结构决定能力边界**，这是本篇论文最值得吸收的工程思想。"
+    },
+    {
+      "h": "收益、代价与自查",
+      "md": "论文口径：相对当时 SOTA（FasterTransformer、Orca）吞吐提升 **2–4×**，相对 HuggingFace 原生推理最高约 **24×**；KV 显存浪费降到 4% 以内。\n\n代价与权衡：\n\n- kernel 需要跨块 gather，实现复杂、对 block_size 敏感\n- block_size 是折中：块小 → 碎片更少、prefix 命中更细，但块表更大、调度开销更高。默认 16 是经验平衡点\n- 物理 block 池就是服务的并发预算：`--gpu-memory-utilization` 决定池子大小\n\n> 自查清单：能画出两条序列各自 block table 指向同一物理块（共享系统提示）的示意图吗？能说出 PagedAttention kernel 与标准 attention kernel 的输入差异吗？能解释为什么这个设计让 vLLM 的 best-of-n 采样特别便宜吗？"
+    }
+  ],
+  "keyPoints": [
+    "连续预留 KV 显存导致 60–80% 浪费（内部碎片 + 外部碎片），是吞吐的隐形杀手",
+    "PagedAttention = OS 分页思想：逻辑块 + 物理块 + block table，按需分配，浪费 <4%",
+    "注意力 kernel 必须支持按块表 gather 非连续 KV——这是论文的核心工程贡献",
+    "页式管理送出三大红利：写时复制（beam/并行采样共享前缀）、prefix caching（共享系统提示）、抢占重算",
+    "vLLM 论文吞吐：相对 SOTA 2–4×、相对 HF 原生最高约 24×"
+  ],
+  "quiz": [
+    {
+      "q": "预留 2048 token 空间但序列 200 token 就结束，这种浪费属于？",
+      "options": ["内部碎片", "外部碎片", "写时复制", "调度气泡"],
+      "answer": 0,
+      "explain": "内部碎片 = 预留空间内部没用满；外部碎片 = 空闲显存因不连续而无法复用。两者都源于『按 max_len 连续预留』的设计。"
+    },
+    {
+      "q": "block_size=16，某序列共 100 个 token，占用几个逻辑块？碎片多大？",
+      "options": ["7 个块（容量 112），最后一块只放 4 个 token，浪费 12", "6 个块，无浪费", "100 个块", "8 个块，浪费 0"],
+      "answer": 0,
+      "explain": "ceil(100/16)=7 块，容量 7×16=112，浪费 12 个 token 位置。序列越长，尾部零头占比越小，整体平均浪费 <4%。"
+    },
+    {
+      "q": "写时复制（CoW）在什么场景收益最大？",
+      "options": ["beam search / 并行采样：多条候选共享同一 prompt 的物理块，分歧时才复制", "单条请求的普通生成", "长文档摘要", "模型量化"],
+      "answer": 0,
+      "explain": "多条候选的前缀完全相同，共享物理块后重复前缀只存一份；第一次分歧（写）才触发复制。连续预留方案做不到。"
+    },
+    {
+      "q": "prefix caching 为什么对 chat 服务特别有效？",
+      "options": ["大量请求携带相同的系统提示，其 KV 块可直接复用，prefill 几乎免算、TTFT 大降", "它能减少模型参数量", "它把权重换到 CPU", "它提高了 GPU 频率"],
+      "answer": 0,
+      "explain": "系统提示相同 → KV 相同 → 物理块跨请求复用。prefill 从重算整段提示变成只算新增部分，首 token 延迟显著下降。"
+    },
+    {
+      "q": "PagedAttention 本质上解决的是？",
+      "options": ["KV cache 显存的碎片化与浪费", "注意力算子本身的浮点效率", "模型权重的压缩", "分词速度"],
+      "answer": 0,
+      "explain": "它是显存管理技术，不是算子优化技术；算子效率是 FlashAttention 一系（Day 120）的战场。两类优化正交、可叠加。"
+    },
+    {
+      "q": "由于 KV 不再连续，PagedAttention kernel 相比标准 attention kernel 需要？",
+      "options": ["按 block table 逐块 gather K/V 分块计算注意力", "把整段 KV 拷贝成连续再算", "只支持 batch=1", "放弃因果掩码"],
+      "answer": 0,
+      "explain": "kernel 输入多了一张块表，按逻辑顺序逐块读取物理块并累积注意力结果，这也是其实现复杂、对 block_size 敏感的原因。"
+    }
+  ]
+}

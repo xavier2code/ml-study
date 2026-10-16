@@ -1,0 +1,90 @@
+{
+  "day": 28,
+  "title": "Phase 1 中期复盘 + 缓冲",
+  "sections": [
+    {
+      "h": "缓冲日的正确打开方式",
+      "md": "留缓冲日不是没事干，而是**前面的债总是存在的**。今天两件事：「防生疏」——重做 numpy 手写梯度与 PyTorch 对照；「验真」——把 Titanic 提交 Kaggle 公开榜，检验 Phase 1 真实水平。\n\n缓冲日纪律：**不学新东西**。新知识的「进步感」是甜的，补漏的「扎实感」才是复利。该补什么：翻开 Day 27 错题本，从最疼的条目开始。\n\n与 LLM 的关联：大模型中途评估同理——不追新，先确认已学的没滑坡。"
+    },
+    {
+      "h": "重做：numpy 手写梯度下降",
+      "md": "从空文件开始（不看旧代码），用 numpy 实现线性回归梯度下降——目标**10 分钟内写出来**，检验肌肉记忆：\n\n```python\nimport numpy as np\n\nX = np.random.rand(200, 3)\nw_true = np.array([2.0, -3.0, 1.5])\ny = X @ w_true + 0.1 * np.random.randn(200)\n\nw = np.zeros(3)\nlr = 0.1\nfor step in range(500):\n    y_hat = X @ w                    # 前向\n    err = y_hat - y                  # 残差\n    loss = (err ** 2).mean()         # MSE\n    grad = 2 * X.T @ err / len(y)    # 梯度\n    w = w - lr * grad                # 更新\n```\n\n三个自检点，答不上来就是生疏了：\n\n1. 梯度为什么是 `2 * X.T @ err / n`？（MSE 对 w 求导，链式法则：外层 2/n 乘内层 Xᵀ·残差）\n2. `X.T @ err` 的形状为什么是 (3,)？（(3,200)@(200,)→(3,)，正好每个权重一份梯度）\n3. 学习率调到 1.0 会怎样？（损失发散到 NaN——步长太大越过谷底越荡越远）\n\n> 这 30 行脚本就是所有训练循环的骨架：前向 → 损失 → 梯度 → 更新。PyTorch 只是把每步换成库函数。"
+    },
+    {
+      "h": "对照：PyTorch 十行等价实现",
+      "md": "同一问题用 PyTorch 再写一遍，**逐行对照**找映射——这张映射表是 Phase 2 的入场券：\n\n```python\nimport torch\n\nXt = torch.tensor(X, dtype=torch.float32)\nyt = torch.tensor(y, dtype=torch.float32)\nw = torch.zeros(3, requires_grad=True)\nlr = 0.1\nfor step in range(500):\n    loss = ((Xt @ w - yt) ** 2).mean()  # 前向 + 损失\n    loss.backward()                     # 自动求梯度\n    with torch.no_grad():\n        w -= lr * w.grad                # 更新\n        w.grad.zero_()                  # 清零，否则梯度会累加\n```\n\n| 手写 numpy | PyTorch | 说明 |\n|---|---|---|\n| `y_hat = X @ w` | `Xt @ w` | 前向一样 |\n| 手推导数公式 | `loss.backward()` | autograd 自动求 |\n| `w = w - lr*grad` | `w -= lr * w.grad` | 更新要包在 no_grad 里 |\n| 无 | `w.grad.zero_()` | 梯度默认累加，需手动清零 |\n\n**两个坑**：①`requires_grad=True` 的张量原地更新报错，要在 `no_grad()` 里更新；②忘 `zero_()` 是新手第一大 bug——梯度越滚越大，损失诡异。今天踩过，明天 nn.Module 就不会摔跤。"
+    },
+    {
+      "h": "Kaggle 验证：公开榜前 30%",
+      "md": "本地 CV 0.81 是「自我感觉」，公开榜是「外部标尺」。Titanic 榜上 13000+ 队，前 30% 约 0.79–0.80。流程：\n\n1. 注册 Kaggle 加入 Titanic，下载 `test.csv`、`gender_submission.csv`（提交格式模板）\n2. 用最稳 pipeline 预测 test 集，生成 `PassengerId,Survived` 两列 csv\n3. 提交看分数与排名（公开榜只反映 test 一半，别过度拟合它）\n\n**分数不如 CV 时怎么诊断**：\n\n| 现象 | 可能原因 | 动作 |\n|---|---|---|\n| 公开榜比 CV 低 1–2 点 | 正常分布差异 | 不用管 |\n| 低 5 点以上 | 特征泄漏、CV 与分布不符 | 查 pipeline，改分层 CV |\n| 本地 CV 高榜低 | 严重过拟合 / 泄漏 | 回 Day 29–30 复习正则化 |\n\n上榜的心理意义大于技术意义：完成了「本地实验 → 外部验证」闭环，与工业「离线 → A/B 测试」同构。差一点没到 30% 别恋战——差距写进错题本，Day 30 还有机会。"
+    },
+    {
+      "h": "今日串联",
+      "md": "两个任务是一体两面：**numpy↔PyTorch 对照**确认「引擎」没生锈（基本功），**Kaggle 上榜**确认「整车」能上路（交付能力）。\n\n缓冲日收尾自检清单：\n\n- [ ] 能盲写 numpy 梯度下降并解释每行\n- [ ] 能说出 PyTorch 版多出的两件事：no_grad 更新、grad 清零\n- [ ] Kaggle 至少完成一次有效提交，分数记入 MLflow\n- [ ] 与目标的差距已写进错题本\n\n全部打勾，Phase 1 下半场（选型决策 + 特征工程复习）就能轻装上阵。"
+    }
+  ],
+  "keyPoints": [
+    "缓冲日纪律：不学新知识，只补旧漏洞——从错题本最疼的一条开始",
+    "训练循环骨架：前向 → 损失 → 梯度 → 更新，numpy 与 PyTorch 一一对应",
+    "MSE 梯度 = 2·Xᵀ·残差/n，形状 (3,) 对应每个权重各一份梯度",
+    "PyTorch 两坑：参数更新要在 no_grad 里；梯度默认累加必须 zero_()",
+    "本地 CV 与公开榜差距 1–2 点正常，5 点以上怀疑泄漏或过拟合"
+  ],
+  "quiz": [
+    {
+      "q": "线性回归 MSE 损失下，权重 w 的梯度表达式是？",
+      "options": [
+        "Xᵀ·残差",
+        "2·Xᵀ·残差/n",
+        "残差/n",
+        "2·X·残差/n"
+      ],
+      "answer": 1,
+      "explain": "对 w 求导时链式法则带出常数 2，除以样本数 n 是 mean 的贡献；X 必须转置成 (3,200) 才能与残差 (200,) 相乘得到 (3,)。"
+    },
+    {
+      "q": "PyTorch 训练循环中 `loss.backward()` 之后忘记 `w.grad.zero_()`，下一轮会发生什么？",
+      "options": [
+        "没有任何影响",
+        "梯度会在原基础上累加，更新方向错误，训练异常",
+        "PyTorch 自动清零",
+        "程序直接报错退出"
+      ],
+      "answer": 1,
+      "explain": "PyTorch 的梯度默认跨 backward 累加（方便梯度累积等场景），不手动清零则每轮叠加历史梯度，损失曲线会变得诡异。"
+    },
+    {
+      "q": "用 `requires_grad=True` 的参数张量直接执行 `w -= lr * w.grad` 为什么会报错？",
+      "options": [
+        "语法写错了",
+        "带梯度的张量参与原地更新会破坏计算图记录，需在 no_grad() 上下文中更新",
+        "学习率必须是整数",
+        "w.grad 还没初始化"
+      ],
+      "answer": 1,
+      "explain": "更新是优化器步骤而非计算图的一部分，在梯度追踪下做原地修改会污染 autograd，所以要包在 with torch.no_grad() 里。"
+    },
+    {
+      "q": "本地 CV 0.83，Kaggle 公开榜 0.815，最可能的判断是？",
+      "options": [
+        "严重过拟合，立即推倒重来",
+        "正常的分布差异（1–2 个点内），记录后继续",
+        "特征泄漏，删掉一半特征",
+        "提交文件格式错了"
+      ],
+      "answer": 1,
+      "explain": "本地 CV 与公开榜数据分布存在天然差异，1–2 个点的滑落属于正常范围；若掉 5 个点以上才需要怀疑泄漏或过拟合。"
+    },
+    {
+      "q": "本地 CV 分数很高但公开榜很低，且差距超过 5 个点，优先检查什么？",
+      "options": [
+        "换更强的模型",
+        "加大数据集",
+        "特征泄漏（如用了全量数据做编码/统计）和过拟合",
+        "多提交几次取平均"
+      ],
+      "answer": 2,
+      "explain": "CV 与榜大幅背离的经典原因是信息泄漏（编码/标准化时用了验证集信息）或过拟合——先查 pipeline，而不是堆模型。"
+    }
+  ]
+}

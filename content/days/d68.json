@@ -1,0 +1,73 @@
+{
+  "day": 68,
+  "title": "手写 mini-Transformer（前向）",
+  "sections": [
+    {
+      "h": "Phase 3 预热：亲手造一遍引擎",
+      "md": "读过 Attention Is All You Need ≠ 会写 Transformer。不看 nanoGPT，**只凭理解从零拼一个 6 层 encoder-only Transformer 的前向**——检验两周学习的试金石，也是 Phase 3 的热身。\n\n规格：6 层、d_model=128、8 头、d_ff=512。encoder-only 即**无交叉注意力、无因果掩码**——双向自注意力，每位置输出上下文向量，接分类头即文本分类。结构：\n\n```\nEmbedding+位置 → N×[LN→注意力→残差→LN→FFN→残差] → LN → 分类头\n```\n\n**Pre-LN**（归一化在子层前）是现代标准，训练比原论文的 Post-LN 稳定得多。"
+    },
+    {
+      "h": "积木一：多头自注意力",
+      "md": "公式先默写：`Attention(Q,K,V) = softmax(QKᵀ/√d_k)·V`。多头 = d_model 切 h 份并行做注意力再拼回：\n\n```python\nclass MultiHeadSelfAttention(nn.Module):\n    def __init__(self, d_model, n_heads):\n        super().__init__()\n        self.h, self.dk = n_heads, d_model // n_heads\n        self.qkv  = nn.Linear(d_model, 3 * d_model)  # 一次出 QKV\n        self.proj = nn.Linear(d_model, d_model)\n\n    def forward(self, x):                # (B,T,C)\n        B, T, C = x.shape\n        q, k, v = self.qkv(x).chunk(3, -1)\n        q, k, v = [t.view(B,T,self.h,self.dk).transpose(1,2) for t in (q,k,v)]\n        att = q @ k.transpose(-2,-1) / self.dk**0.5\n        y = att.softmax(-1) @ v\n        y = y.transpose(1,2).contiguous().view(B,T,C)  # 拼头\n        return self.proj(y)\n```\n\n三个自检：**为什么除 √d_k**——点积方差随维度增大，softmax 饱和，缩放归一；**为什么多头**——子空间各学一种关联，总量不变；**为何 contiguous**——view 要求内存连续。encoder-only 无掩码；decoder 在 softmax 前加 `masked_fill(mask==0, -inf)` 即因果版。"
+    },
+    {
+      "h": "积木二：FFN、残差与整体组装",
+      "md": "FFN 是逐位置两层 MLP（4× 升维 + GELU），与注意力拼成 Pre-LN 层：\n\n```python\nclass Block(nn.Module):                  # Pre-LN 层\n    def __init__(self, d, heads, d_ff):\n        super().__init__()\n        self.ln1, self.ln2 = nn.LayerNorm(d), nn.LayerNorm(d)\n        self.attn = MultiHeadSelfAttention(d, heads)\n        self.ff = nn.Sequential(nn.Linear(d, d_ff), nn.GELU(),\n                                nn.Linear(d_ff, d))\n    def forward(self, x):\n        x = x + self.attn(self.ln1(x))     # 残差在归一化外\n        return x + self.ff(self.ln2(x))\n```\n\n整体组装：`x = tok(idx) + pos(arange(T))` → 过 blocks → `head(ln_f(x).mean(dim=1))`（LN+池化+分类头）；tok/pos 是 `nn.Embedding`，参数约 1.1M。组装后两件事：**参数量盘点**（数量级不对=维度接错）；**冒烟**——喂 `randint(0, vocab, (4, 64))` 确认输出 (4, n_cls)。"
+    },
+    {
+      "h": "跑通：小文本分类任务",
+      "md": "用小数据集（如 SST-2 二分类）补上验证闭环：①tokenizer 转 id、截断到固定长度（选等长小数据集，避开 padding 细节）；②训练循环即 Day 64 模板——交叉熵 + AdamW（lr 3e-4）+ warmup+cosine。\n\n跑通标准不是没报错，而是**三个数字都对**：初始 loss ≈ 0.693（=ln2）、训练 loss 持续下降、验证准确率超随机。任一不满足回头查——通常是形状静默广播或 embedding 忘加位置信息。"
+    },
+    {
+      "h": "与 LLM 的关联：你已写下 GPT 的 80%",
+      "md": "Block 结构与 GPT 完全相同，GPT-2 small 就是 12 层、d_model=768、12 头的放大。差距只有三处：**①因果掩码**（一行 masked_fill）；**②目标**换成下一词预测（头改词表大小，逐位置交叉熵）；**③规模**。nanoGPT 核心不到 300 行，你今天写了 200 行。\n\n这些细节（qkv 融合省 kernel 启动、拼头要 contiguous）也是读懂 flash attention、MQA/GQA（减 KV 头省 cache）的前置。Phase 3 打开 GPT 代码时，你将是作者视角，而非游客。"
+    }
+  ],
+  "keyPoints": [
+    "encoder-only mini-Transformer = Embedding+位置 → N×[PreLN→MSA→残差→PreLN→FFN→残差] → LN → 分类头",
+    "注意力缩放除 √d_k：防止点积方差随维度增大导致 softmax 饱和、梯度消失",
+    "多头 = d_model 切 h 份独立注意力再拼接，总计算量不变但可学多种关联模式",
+    "Pre-LN（归一化在子层前）比原论文 Post-LN 训练稳定，是现代标准",
+    "FFN 逐位置两层 MLP，中间 4× 升维 + GELU；参数约占全模型 2/3",
+    "跑通三信号：初始 loss ≈ ln(n_cls)、训练 loss 下降、验证准确率超随机基线",
+    "与 GPT 只差三件事：因果掩码、下一词预测目标、规模——今天已写下 nanoGPT 的大部分"
+  ],
+  "quiz": [
+    {
+      "q": "注意力公式中除以 √d_k 的原因是？",
+      "options": ["减少计算量", "点积方差随维度线性增大，softmax 会饱和成近似 one-hot 导致梯度消失，缩放把方差归一", "防止数值溢出变成 NaN", "让输出和输入形状一致"],
+      "answer": 1,
+      "explain": "q、k 各分量独立时点积方差约为 d_k，直接 softmax 后分布极端尖锐、梯度近零；除 √d_k 恢复方差 1，是训练稳定的必要条件。"
+    },
+    {
+      "q": "多头注意力把 (B,T,C) reshape 成 (B,h,T,dk) 的意义是？",
+      "options": ["为了省显存", "让每个头在 C/h 维子空间内独立计算注意力，学不同的关联模式，总计算量不变", "为了能反向传播", "把序列变长"],
+      "answer": 1,
+      "explain": "多头=把表示空间切成 h 个子空间并行做注意力，最后拼接收回全部信息；相比单头同维，表达力更强而计算量相同。"
+    },
+    {
+      "q": "Pre-LN 与 Post-LN 的区别及现代选择是？",
+      "options": ["Pre-LN 把 LayerNorm 放在子层输入侧，梯度经残差主干直达浅层，训练更稳定，是现代标准", "Post-LN 训练更稳定", "两者完全等价", "现代模型不用 LayerNorm"],
+      "answer": 0,
+      "explain": "Post-LN（原论文）在残差加法后归一化，深层梯度易不稳需小心 warmup；Pre-LN 让恒等主干畅通，深模型也能稳定训练，GPT 系与多数现代实现均用 Pre-LN。"
+    },
+    {
+      "q": "transpose(1,2) 之后调用 .view() 报错，需要插入的操作是？",
+      "options": [".detach()", ".contiguous()", ".squeeze()", ".clone()"],
+      "answer": 1,
+      "explain": "transpose 只修改步长不搬数据，内存不再按逻辑形状连续，view 要求连续；contiguous() 复制成连续内存后 view 才合法。也可用 reshape 自动处理。"
+    },
+    {
+      "q": "二分类任务上模型刚初始化时，训练 loss 的合理值约为？",
+      "options": ["0（应该直接会分类）", "≈ ln 2 ≈ 0.693", "≈ 1.0", "≈ 10"],
+      "answer": 1,
+      "explain": "随机初始化的模型输出近似均匀分布，交叉熵 ≈ ln(类别数)；二分类即 0.693。初始 loss 明显偏离说明标签或损失接错了——最便宜的正确性检查。"
+    },
+    {
+      "q": "今天的 encoder-only 模型改成 GPT 式生成模型，最少需要改哪些？",
+      "options": ["全部重写", "注意力加因果掩码 + 输出头改为词表大小并逐位置预测下一词", "只需把 GELU 换成 ReLU", "把 LayerNorm 去掉"],
+      "answer": 1,
+      "explain": "结构骨架（Block/残差/Pre-LN/FFN）原样保留：softmax 前把未来位置掩成 -∞ 实现因果性，分类头换语言模型头并对每个位置算下一词交叉熵——这正是 nanoGPT 与今天的差别。"
+    }
+  ]
+}

@@ -1,0 +1,102 @@
+{
+  "day": 37,
+  "title": "numpy 手写反向传播（上）",
+  "sections": [
+    {
+      "h": "今天的目标：一个能训练的 numpy MLP",
+      "md": "昨天手算了一个样本，今天把公式工程化：一个不依赖任何框架的 `TwoLayerMLP` 类，结构为\n\n```\nX (N×D) → Linear(D→H) → ReLU → Linear(H→C) → softmax → 交叉熵\n```\n\n设计只遵守两条原则：\n\n- **forward 算什么就缓存什么**：反向公式里出现的每个中间量（X、z1、h、p）都要留下\n- **backward 从 (p − y) 开始**：softmax 和交叉熵合并求导，起点干净得惊人\n\n为什么用 ReLU 而不是昨天的 sigmoid？它导数只有 0/1，代码最不容易写错；为什么 softmax+CE 合并？分开求导要面对完整的 Jacobian，合并后梯度就是 (p − onehot)/N——第 41 天会解释这个“礼物”从哪来。"
+    },
+    {
+      "h": "前向传播：缓存是为了反向",
+      "md": "```python\nimport numpy as np\n\nclass TwoLayerMLP:\n    def __init__(self, d_in, d_hidden, d_out, seed=0):\n        rng = np.random.default_rng(seed)\n        self.W1 = rng.normal(0, 0.1, (d_in, d_hidden))\n        self.b1 = np.zeros(d_hidden)\n        self.W2 = rng.normal(0, 0.1, (d_hidden, d_out))\n        self.b2 = np.zeros(d_out)\n\n    def forward(self, X):\n        z1 = X @ self.W1 + self.b1          # (N, H)\n        h  = np.maximum(0, z1)              # (N, H)  ReLU\n        z2 = h @ self.W2 + self.b2          # (N, C)\n        z2 = z2 - z2.max(axis=1, keepdims=True)   # 数值稳定\n        p  = np.exp(z2)\n        p /= p.sum(axis=1, keepdims=True)   # softmax，(N, C)\n        return p, (X, z1, h, p)             # 缓存全部中间量\n```\n\n两个细节：`z2 − max` 把指数的输入压到 ≤ 0，防上溢（结果不变，分子分母同乘常数）；缓存 p 而不是重算，因为反向第一步要用。"
+    },
+    {
+      "h": "反向传播：从 (p − y)/N 开始",
+      "md": "```python\n    def loss(self, p, y):\n        N = len(y)\n        return -np.log(p[np.arange(N), y] + 1e-12).mean()\n\n    def backward(self, y, cache):\n        X, z1, h, p = cache\n        N = len(y)\n        delta2 = p.copy()                   # softmax + CE 联合梯度\n        delta2[np.arange(N), y] -= 1.0\n        delta2 /= N                         # (N, C)\n        dW2 = h.T @ delta2                  # (H, C)   昨天的 Xᵀ·δ\n        db2 = delta2.sum(axis=0)            # (C,)\n        dh  = delta2 @ self.W2.T            # (N, H)   昨天的 δ·Wᵀ\n        dz1 = dh * (z1 > 0)                 # ReLU 导数：1 或 0\n        dW1 = X.T @ dz1                     # (D, H)\n        db1 = dz1.sum(axis=0)               # (H,)\n        return {\"W1\": dW1, \"b1\": db1, \"W2\": dW2, \"b2\": db2}\n```\n\n逐行对照昨天的三条公式：`h.T @ delta2` 就是 ∂L/∂W = Xᵀ·δ，`delta2 @ self.W2.T` 就是 ∂L/∂h = δ·Wᵀ，`dh * (z1 > 0)` 就是 ⊙ f′(z)。**除以 N** 是因为 loss 取了 batch 平均——忘了它，学习率会随 batch size 悄悄改变。"
+    },
+    {
+      "h": "数值梯度检查：反向传播的单元测试",
+      "md": "手写反向传播，你写的和你以为写的常常不是同一份代码。数值梯度是裁判：对任意参数 w，用定义算近似梯度\n\n```\n(f(w+h) − f(w−h)) / 2h\n```\n\n```python\ndef num_grad(f, x, eps=1e-5):\n    g = np.zeros_like(x)\n    it = np.nditer(x, flags=[\"multi_index\"])\n    while not it.finished:\n        i = it.multi_index\n        old = x[i]\n        x[i] = old + eps; fp = f()\n        x[i] = old - eps; fm = f()\n        x[i] = old\n        g[i] = (fp - fm) / (2 * eps)\n        it.iternext()\n    return g\n\n# 用法：对每个参数逐一比对\np, cache = net.forward(X)\nloss = lambda: net.loss(net.forward(X)[0], y)\ng = net.backward(y, cache)\nfor name, arr in [(\"W1\", net.W1), (\"W2\", net.W2)]:\n    ng = num_grad(loss, arr)\n    rel = np.abs(g[name] - ng).max() / (np.abs(ng).max() + 1e-12)\n    print(name, rel)        # 期望 < 1e-7（float64）\n```\n\n三个要点：用**中心差分**（误差 O(h²)，比单侧 O(h) 精确一个量级）；eps 取 1e-5 左右（太大截断误差、太小浮点噪声）；**全程 float64**，float32 的噪声会淹没信号。这个技巧值得陪你整个职业生涯——任何自定义层的正确性都可以这样验证。"
+    },
+    {
+      "h": "上机前的三个 sanity check",
+      "md": "在跑真正的训练前，三个便宜的检查能省下数小时调试：\n\n1. **初始 loss ≈ ln(C)**：随机小权重下 softmax 输出接近均匀分布，3 类问题 loss 应约 1.10、10 类约 2.30。若明显偏离，前向或 loss 写错了。\n2. **能过拟合 20 个样本**：取一小撮数据训练几百步，loss 应能压到接近 0。学不动说明反向或优化有问题——“有能力记住”是“有能力泛化”的前提。\n3. **数值梯度对得上**：上一节的方法，相对误差 < 1e-7。\n\n> 这三条来自 Andrej Karpathy 的“训练前食谱”。LLM 时代同样适用：nanoGPT 训练脚本里也先检查初始 loss ≈ ln(50257) ≈ 10.82。\n\n明天给这个类装上 momentum 优化器，跑螺旋分类，再和 PyTorch 逐位对拍梯度。"
+    }
+  ],
+  "keyPoints": [
+    "forward 缓存所有反向需要的中间量（X、z1、h、p）；反向用完即可丢弃",
+    "softmax + 交叉熵联合求导：∂L/∂z2 = (p − onehot(y)) / N——起点极简，是分开求导时 Jacobian 相消的礼物",
+    "四行核心：dW = hᵀ·δ，db = δ 沿 batch 求和，δ_prev = δ·Wᵀ，过激活再 ⊙ f′(z)",
+    "数值梯度检查用中心差分 (f(w+h)−f(w−h))/2h + float64 + eps≈1e-5，期望相对误差 < 1e-7",
+    "训练前三个 sanity check：初始 loss ≈ ln(C)；能过拟合小样本；数值梯度一致",
+    "softmax 前减去每行最大值防上溢，结果数学上不变"
+  ],
+  "quiz": [
+    {
+      "q": "backward 里写 `dz1 = dh * (z1 > 0)`，其中 `(z1 > 0)` 的作用是？",
+      "options": [
+        "把负梯度清零",
+        "作为 ReLU 的导数：z1>0 处为 1，否则为 0（布尔数组参与乘法时当 1/0 用）",
+        "归一化梯度",
+        "防止除零"
+      ],
+      "answer": 1,
+      "explain": "ReLU 的导数在正区间是 1、非正区间是 0。`(z1 > 0)` 是布尔数组，numpy 会把它转成 1.0/0.0 再逐元素相乘。注意必须用 z1 判断而不是 h——虽然两者在本例等价，用 z1 语义更清楚且能推广到 leaky ReLU。"
+    },
+    {
+      "q": "为什么反向公式里处处要除以 N（batch 大小）？",
+      "options": [
+        "为了让梯度更小、训练更稳",
+        "因为 loss 对 batch 取了平均，链式法则要求梯度也除以 N",
+        "为了数值稳定",
+        "这是工程约定，不除也可以且完全等价"
+      ],
+      "answer": 1,
+      "explain": "loss = 平均交叉熵，d(mean)/dz 天然带 1/N。忘了除 N，梯度会随 batch size 缩放：换 batch size 等于换了学习率，调好的超参全部失效。"
+    },
+    {
+      "q": "数值梯度检查为什么推荐中心差分而不是单侧差分 (f(w+h)−f(w))/h？",
+      "options": [
+        "中心差分写起来更短",
+        "中心差分误差是 O(h²)，单侧是 O(h)，同样的 h 精度高一个量级",
+        "单侧差分只能算正梯度",
+        "中心差分不需要选 eps"
+      ],
+      "answer": 1,
+      "explain": "泰勒展开：单侧差分残留 −f″·h/2 的截断误差；中心差分的 h 项相消，只剩 O(h²)。eps 取 1e-5 时中心差分能到 1e-10 量级的精度，足够验证手写梯度。"
+    },
+    {
+      "q": "10 分类问题，随机小权重初始化后第一次 forward 的 loss 大约是多少？",
+      "options": [
+        "约 0.1",
+        "约 1.0",
+        "约 2.30（即 ln 10）",
+        "取决于输入维度，无法估计"
+      ],
+      "answer": 2,
+      "explain": "小权重下 logits 接近全零，softmax 输出接近均匀分布 1/10，交叉熵 = −ln(0.1) ≈ 2.30。这是最便宜的前向正确性检查；nanoGPT 对 50257 词表的版本是 ≈10.82。"
+    },
+    {
+      "q": "以下哪段代码有 bug？",
+      "options": [
+        "dW2 = h.T @ delta2",
+        "dh = delta2 @ self.W2.T",
+        "dW2 = delta2 @ h.T",
+        "db1 = dz1.sum(axis=0)"
+      ],
+      "answer": 2,
+      "explain": "`delta2 @ h.T` 的形状是 (N,C)@(C,H) → (N,H)，根本不等于 W2 的形状 (H,C)——形状检查直接判死。只有当 H=C 的方阵场景形状才碰巧对，但数值也是错的（相当于对转置求了梯度）。"
+    },
+    {
+      "q": "第二个 sanity check“能过拟合 20 个样本”的目的是？",
+      "options": [
+        "测试泛化能力",
+        "验证模型容量和训练链路（前向+反向+优化器）都工作正常，有能力记住才有能力泛化",
+        "找最优学习率",
+        "估计训练时间"
+      ],
+      "answer": 1,
+      "explain": "小样本过拟合是最强的“链路通畅”信号：loss 压不到 0 说明某处断了。它测的不是泛化——恰恰相反，是刻意检查模型能否先“记住”。"
+    }
+  ]
+}

@@ -1,0 +1,101 @@
+{
+  "day": 153,
+  "title": "生产化：限流 / 灰度 / A/B 评估",
+  "sections": [
+    {
+      "h": "从 demo 到产品：工程底子发挥的地方",
+      "md": "昨天的 Agent 在你机器上跑通了——但一旦多人使用，三个问题立刻出现：**GPU 被打爆**（一个用户传长视频，后面全部排队）、**改了 prompt 没有回归保障**（今天 95 分明天 80 分你都不知道）、**新版本不敢上**（一出错全员受害）。今天用你熟悉的工程手段解决：限流与多租户隔离、灰度发布、A/B 评估。\n\nLLM 应用与传统后端最大的不同：**质量指标是概率性的、输出不唯一**——「正确率 92%」需要真实请求样本统计，而不是 assert 两个字符串相等。所以 A/B 框架不只是分流，还要**收集线上反馈闭环**。"
+    },
+    {
+      "h": "FastAPI 限流 + 多租户",
+      "md": "限流的核心是定义「谁、在哪个维度、多少额度」。多租户 = 每个租户（API key）独立的配额桶：\n\n```python\nfrom fastapi import FastAPI, HTTPException, Depends\nimport time, collections\n\nRATE = {\"free\": (2, 60), \"pro\": (30, 60)}  # 每 60 秒 N 次\nBUCKETS = collections.defaultdict(\n    collections.deque)\n\ndef check(tenant: dict):\n  n, win = RATE[tenant[\"plan\"]]\n  q = BUCKETS[tenant[\"key\"]]\n  now = time.monotonic()\n  while q and q[0] <= now - win: q.popleft()\n  if len(q) >= n:\n    raise HTTPException(429, detail=\"rate limited\")\n  q.append(now)\n\n@app.post(\"/v1/analyze\")\ndef analyze(video: str, t=Depends(auth_tenant)):\n  check(t)\n  return pipeline.run(video)   # 昨天的 Agent\n```\n\n四层限流额度：**请求速率**（上例）、**并发数**（`asyncio.Semaphore(2)`）、**日 token 预算**（防恶意超长输入）、**视频时长上限**（免费 10 分钟）。多租户再加两件：配额按租户分桶 + trace/日志带 `tenant_id`（昨天 Langfuse 已打好）。生产用 `slowapi` 或网关层（nginx `limit_req`），内存桶换 Redis 即可横向扩展。"
+    },
+    {
+      "h": "灰度发布：让 5% 的用户先踩坑",
+      "md": "新版本（新 prompt、新模型、新抽取策略）上线流程：**影子 → 灰度 → 全量**。\n\n1. **影子模式**：新版本只跑不返回，结果落库对比——零用户风险，先看分布差异\n2. **灰度**：按稳定哈希分流，5% → 25% → 100%，每档观察核心指标至少一轮完整使用周期\n3. **回滚开关**：配置中心一个 flag 切回，秒级生效\n\n```python\nimport hashlib\ndef variant(tenant_key: str, exp=\"vlm-v2\") -> str:\n  h = hashlib.sha256(f\"{exp}:{tenant_key}\".encode()).hexdigest()\n  return \"treatment\" if int(h[:8], 16) % 100 < 5 else \"control\"\n```\n\n关键点：**用稳定哈希而非随机数**——同一用户永远落在同一组，体验一致且指标无交叉污染；分流维度用 tenant/user 级而不是请求级。"
+    },
+    {
+      "h": "A/B 评估框架：线上质量要闭环",
+      "md": "LLM 输出没有唯一正确答案，评估三件套：**自动指标 + 抽样人评 + 线上反馈信号**。\n\n```python\ndef eval_run(trace_id, variant, output, feedback=None):\n  return db.insert({\n    \"trace_id\": trace_id, \"variant\": variant,\n    \"auto\": auto_scores(output),      # 覆盖率/幻觉率/结构完整\n    \"feedback\": feedback,             # 👍/👎 或修正文本\n    \"cost\": tokens*price, \"latency\": ms})\n\ndef report(exp=\"vlm-v2\"):\n  rows = db.query(exp)\n  for v in {\"control\", \"treatment\"}:\n    g = [r for r in rows if r[\"variant\"] == v]\n    print(v, \"好评率\", mean(r[\"feedback\"] for r in g),\n          \"成本\", mean(r[\"cost\"] for r in g))\n```\n\n自动指标怎么定：转写 CER 可全自动；总结质量用「结构完整（四个字段齐全）+ 事实一致性（关键帧描述与总结对齐）+ 幻觉率（总结里的实体是否出现在转写中）」。线上 👍/👎 转化成好评率对比。**显著性检验**别忘：小样本差异可能是噪声，好评率差 3% 需要 thousands 级反馈才有说服力（比例检验或 bootstrap 置信区间）。框架本身一小时能搭完，难点全在指标设计。"
+    },
+    {
+      "h": "与 LLM/Agent 的关联",
+      "md": "LLM 应用的生产化 = 传统后端工程 + 概率质量的评估闭环。你已有的 SRE/后端直觉（限流、灰度、可回滚）直接迁移，新学的只有一件事：**把「质量」当指标采集而不是当断言写**。\n\n明天把整个 22 周的学习串成 10 分钟完整 demo + README——今天的限流和 A/B 是 demo 里最亮眼的「工程成熟度」部分。"
+    }
+  ],
+  "keyPoints": [
+    "LLM 应用与传统后端最大差异：输出概率性、质量不唯一，必须用真实流量统计评估，不能字符串断言",
+    "四层限流：请求速率、并发数（Semaphore）、日 token 预算、输入时长上限；配额按租户 key 分桶，生产换 Redis",
+    "灰度三步：影子（只跑不返回）→ 稳定哈希分流 5%/25%/100% → 配置中心一键回滚",
+    "稳定哈希（sha256(exp:user)）保证同一用户恒定落组，体验一致且指标无交叉污染",
+    "A/B 三件套：自动指标（CER/结构完整/幻觉率）+ 抽样人评 + 线上反馈；小样本差异需显著性检验"
+  ],
+  "quiz": [
+    {
+      "q": "GPU 排队卡死的直接原因和对应手段是？",
+      "options": [
+        "请求速率太高，加日 token 预算即可",
+        "并发 GPU 任务无上限，需要 asyncio.Semaphore 限并发 + 请求队列",
+        "模型太大，必须换小模型",
+        "视频太长，降低 fps 即可"
+      ],
+      "answer": 1,
+      "explain": "速率限制挡不住单个大并发峰值；并发信号量限制同时运行的任务数，超出的排队或 429，是 GPU 资源的第一道闸。"
+    },
+    {
+      "q": "多租户限流中，配额桶为什么必须按 tenant key 而不是全局分桶？",
+      "options": [
+        "全局桶性能更差",
+        "按租户分桶实现隔离：一个免费用户刷爆配额不影响付费用户",
+        "按租户分桶更省内存",
+        "全局桶无法计数"
+      ],
+      "answer": 1,
+      "explain": "隔离是多租户的本质需求——否则单一恶意租户能耗尽全站资源。配额与限流策略也因套餐而异。"
+    },
+    {
+      "q": "灰度分流为什么用「稳定哈希」而不是每次请求随机数？",
+      "options": [
+        "哈希计算更快",
+        "同一用户始终落同一组，体验一致，且组间指标不交叉污染",
+        "随机数不够均匀",
+        "哈希能降低成本"
+      ],
+      "answer": 1,
+      "explain": "请求级随机会让同一用户在新旧版本间反复横跳：体验割裂，且无法按用户聚合分析；稳定哈希固定组别。"
+    },
+    {
+      "q": "影子模式（shadow mode）的含义是？",
+      "options": [
+        "新版本只对小流量可见并返回结果",
+        "新版本处理真实流量但不返回给用户，结果落库对比",
+        "夜间自动切换版本",
+        "用影子账号测试"
+      ],
+      "answer": 1,
+      "explain": "影子是零风险的第一步：真实输入喂给新版本，输出仅落库对比指标分布，用户始终看到旧版本。"
+    },
+    {
+      "q": "评估总结质量时「幻觉率」可以怎么自动估计？",
+      "options": [
+        "统计输出字数",
+        "检查总结中出现的实体/数字是否能在转写或画面描述中找到依据",
+        "看用户是否点踩",
+        "对比两次运行的输出是否相同"
+      ],
+      "answer": 1,
+      "explain": "可溯源检查：总结里的关键词若在两路感知信息中无出处即疑似幻觉——可自动化，适合大规模初筛。"
+    },
+    {
+      "q": "A/B 实验中好评率 84% vs 81%，样本各 200 条，正确的第一反应是？",
+      "options": [
+        "立即全量上线新版本",
+        "差异可能不显著，需做显著性检验或继续收集样本",
+        "旧版本更好",
+        "好评率不适用，只看延迟"
+      ],
+      "answer": 1,
+      "explain": "小样本下 3 个百分点的差异大概率是噪声；比例检验/bootstrap 置信区间先验证，再谈决策。"
+    }
+  ]
+}

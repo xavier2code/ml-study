@@ -1,0 +1,71 @@
+{
+  "day": 151,
+  "title": "Paraformer / SenseVoice（中文 ASR）",
+  "sections": [
+    {
+      "h": "中文 ASR 的另一条路：非自回归",
+      "md": "昨天部署的 Whisper 是**自回归**模型：逐字生成、后一个字依赖前一个字——准确，但慢，且中文上未必最强。中文语音的工业主流是阿里 FunASR 系（Paraformer、SenseVoice），核心差异一句话：**Paraformer 是非自回归（NAR）——一次性并行预测所有字**，快得多。\n\n为什么中文特别值得学这套：中文无空格分词、同音字多、标点与 ITN（数字/日期口语转写，如「二零二五」→「2025」）都要处理，中文专属方案的这些后处理远比通用模型成熟。今天：精读 Paraformer 思想 + 部署 + 与 Whisper 中文对比。"
+    },
+    {
+      "h": "机制：Paraformer 怎么做到一次并行出全部字",
+      "md": "自回归的顺序依赖是速度瓶颈。Paraformer 的解法分三步：\n\n1. **预测长度**：encoder 输出接一个长度预测器，先估计这句话有几个字（N）\n2. **SOFA Sampler 生成占位 embedding**：根据 N 个「种子向量」在 encoder 输出上采样，生成 N 个解码器输入——每个位置代表一个待输出的字\n3. **并行解码**：decoder 一次前向同时输出 N 个字，各位置互不等待\n\n```\n自回归: y1→y2→y3→…（N 次前向）\nParaformer: 预测 N → N 个占位 → 一次前向出全部（1 次）\n```\n\n代价：NAR 对输出之间的依赖建模弱（同音字选择靠上下文），所以 Paraformer 用 **CIF（连续积分-触发）机制**做长度预测、并保留 decoder 内的非因果注意力来补偿。综合效果：工业实测比 CTC 类 NAR 准确率高 10%+，又比自回归快数倍——生产上「快而准」的甜点位。"
+    },
+    {
+      "h": "FunASR 部署 + SenseVoice 一站式",
+      "md": "FunASR 是阿里的开源语音工具箱，pip 一行装：\n\n```python\nfrom funasr import AutoModel\n\n# Paraformer（含标点、时间戳）\nm = AutoModel(\n  model=\"paraformer-zh\", vad_model=\"fsmn-vad\",\n  punc_model=\"ct-punc\")\nr = m.generate(input=\"meeting.wav\")\nprint(r[0][\"text\"])\n```\n\n**SenseVoice**（2024）走另一个极端：不做逐字转写，做**多任务理解**——一个模型同时输出转写文本 + 语种 + 情感（开心/生气/难过）+ 事件（音乐/掌声/笑声），速度比 Whisper-Large 快 15 倍以上：\n\n```python\nm = AutoModel(model=\"iic/SenseVoiceSmall\")\nr = m.generate(input=\"call.wav\", language=\"zh\")\n# 输出含 <|zh|><|HAPPY|><|MUSIC|> 等标签 + 文本\n```\n\n选型直觉：**要逐字精确转写（字幕、纪要）→ Paraformer；要快速理解「谁在什么情绪下说了什么」→ SenseVoice**。生产组合常见 fsmn-vad 切分 → Paraformer 转写 → ct-punc 标点 → ITN 后处理，全部 FunASR 一条龙。"
+    },
+    {
+      "h": "实验：Whisper vs Paraformer 中文对比",
+      "md": "找 3 类各 1–2 分钟素材：新闻播报、日常对话、带术语的课程录音。统一 16kHz 后分别转写，用 **CER（字符错误率）** 量化：\n\n```python\nimport editdistance\ndef cer(ref, hyp):\n  ref, hyp = list(ref), list(hyp)\n  return editdistance.eval(ref, hyp) / len(ref)\n```\n\n典型结果规律（可自行验证）：\n\n| 维度 | Whisper-large-v3 | Paraformer-zh |\n|---|---|---|\n| 标准普通话 | 很好 | 很好或更稳 |\n| 专有名词/同音字 | 易错（如人名） | 更稳（中文语料偏向） |\n| 标点/ITN | 一般 | 标点模型 + ITN 更成熟 |\n| 英文夹杂 | 强 | 略弱 |\n| 延迟/显存 | 慢、重 | 快（NAR）、轻 |\n\n评估注意：人工校对稿当参考文本时统一去标点再算 CER；听感「差不多」的转写 CER 可能差 2 倍——**多模态 Agent 的质量上限常被感知端锁死**，值得认真测。"
+    },
+    {
+      "h": "与 LLM/Agent 的关联",
+      "md": "ASR 选型是 Agent 工程里的经典权衡题：通用 vs 领域、自回归精度 vs NAR 速度。你已经集齐三块拼图——视频（Qwen2.5-VL）、语音（Whisper/Paraformer 二选一或互补）、推理（你的 LLM 工具链）。\n\n一个实用模式：**双引擎互补**——Paraformer 出精确转写做纪要，SenseVoice 出情绪/事件标签做路由（客户来电愤怒 → 优先转人工）。明天把这些串成完整的视频+语音 Agent。"
+    }
+  ],
+  "keyPoints": [
+    "Paraformer 是非自回归 ASR：先预测输出长度 N，再用 CIF/SOFA 采样生成 N 个占位 embedding，一次前向并行出全部字",
+    "NAR 快数倍；为补偿丢失的顺序依赖，保留 decoder 非因果注意力，准确率显著高于 CTC 类方案",
+    "SenseVoice：一个模型同时出转写+语种+情感+音频事件标签，比 Whisper-Large 快 15 倍以上，适合理解而非逐字纪要",
+    "FunASR 生产流水线：fsmn-vad 切分 → paraformer-zh 转写 → ct-punc 标点 → ITN（二零二五→2025）",
+    "中文对比要点：Paraformer 在同音字/标点/ITN 更稳且快；Whisper 英文夹杂更强；用去标点 CER 量化评估"
+  ],
+  "quiz": [
+    {
+      "q": "非自回归 ASR（如 Paraformer）加速的根本原因是什么？",
+      "options": ["模型参数更少", "先预测输出长度再并行解码，所有字一次前向同时输出，无需逐字等待", "省去了声学特征提取", "只支持短句"],
+      "answer": 1,
+      "explain": "自回归需 N 个 token 串行 N 次前向；NAR 把顺序依赖换成「长度预测 + 占位向量」，一次前向出全部，是结构性的快。"
+    },
+    {
+      "q": "Paraformer 用什么机制预测输出 token 数量？",
+      "options": ["BPE 分词器", "CIF 连续积分-触发机制", "维特比解码", "n-gram 语言模型"],
+      "answer": 1,
+      "explain": "CIF 把 encoder 输出按语音信息量累积积分，累积到阈值触发一个输出位，天然得到与语速无关的长度估计。"
+    },
+    {
+      "q": "做客服通话质检，要快速知道「说话人情绪 + 是否有背景音乐 + 转写内容」，最省事的方案是？",
+      "options": ["Whisper-large-v3 + 单独的情感分类模型", "SenseVoice 一步全出", "Paraformer + ITN", "人工抽听"],
+      "answer": 1,
+      "explain": "SenseVoice 把转写、语种、情感、事件做成一个模型的多任务输出，一次调用全覆盖，且推理极快。"
+    },
+    {
+      "q": "中文转写评估为什么用 CER 而不是 WER？",
+      "options": ["CER 计算更快", "中文没有空格分词，以字为最小单位算编辑距离更公平", "WER 不支持中文", "CER 是词级指标"],
+      "answer": 1,
+      "explain": "WER 以词为单位，中文分词标准不统一会引入额外噪声；按字符算编辑距离（CER）是中文 ASR 的通行标准。"
+    },
+    {
+      "q": "转写「会议在二零二五年三月召开」时，希望输出「2025年3月」，对应的后处理是？",
+      "options": ["VAD", "ITN（逆文本正则化）", "标点恢复", "声学模型重打分"],
+      "answer": 1,
+      "explain": "ITN 把口语数字/日期写法转成书面规范形式，是中文 ASR 生产链路的标准后处理，FunASR 内置支持。"
+    },
+    {
+      "q": "对比实验发现 Paraformer 转写中文人名明显比 Whisper 准，最合理的解释是？",
+      "options": ["Paraformer 参数量大十倍", "Paraformer 的中文语料分布更贴近中文场景，对同音字/专名的先验更强", "Whisper 不支持中文", "Whisper 采样率错误"],
+      "answer": 1,
+      "explain": "两者都支持中文；差异主要来自训练数据分布——中文为主的语料对同音字消歧和专有名词更友好。"
+    }
+  ]
+}

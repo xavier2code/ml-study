@@ -1,0 +1,73 @@
+{
+  "day": 67,
+  "title": "PyTorch Profiler + 性能调优",
+  "sections": [
+    {
+      "h": "先测量，再优化",
+      "md": "性能优化第一定律：**没有 profile 的优化是猜谜**。训练慢的原因五花八门——数据跟不上、算子碎片、同步点、带宽瓶颈——解法各不相同，猜错的代价是几小时白干。\n\n先建立心智模型：一次训练迭代的时间由几段流水线组成：\n\n```\n[CPU 预处理数据] → [H2D 拷贝] → [GPU 前向] → [GPU 反向] → [优化器 step]\n     ↑_____________________可以与 GPU 计算重叠_____________________↑\n```\n\n理想状态下数据准备完全被 GPU 计算覆盖，每步耗时 ≈ GPU 纯计算时间。**任何让 GPU 空转等待的因素都是优化对象**。今天的目标：学会用 profiler 把「GPU 到底在等什么」看清楚。"
+    },
+    {
+      "h": "torch.profiler：抓热点的基本功",
+      "md": "最小可用示例：\n\n```python\nfrom torch.profiler import profile, ProfilerActivity\n\nwith profile(activities=[ProfilerActivity.CPU,\n                          ProfilerActivity.CUDA]) as prof:\n    for _ in range(3):          # 先跑几步热身，别从 0 开始记\n        train_one_step(...)\n    prof.step()\n\nprint(prof.key_averages().table(\n      sort_by='cuda_time_total', row_limit=15))\n```\n\n读表三步法：\n\n1. **看 `Self CUDA`** 而不是总时间——按自身耗时排序找出真正的热点算子（矩阵乘 GEMM、卷积理应占大头）\n2. **找异常项**：`aten::copy_`、`aten::item`、`aten::to` 这类**搬运/同步算子**排前面，说明时间花在了数据挪移而非计算上\n3. **对照 Trace**：`prof.export_chrome_trace('t.json')` 拖进 chrome://tracing，看时间轴上 GPU 是不是有大段空白——空白段就是「等数据」或「等同步」的直接证据\n\n两条法则：**只优化占比前三的热点**（其余不值得碰）；**GPU 利用率长期低于 70%，瓶颈多半在数据或同步而非模型**。"
+    },
+    {
+      "h": "头号嫌犯：数据加载",
+      "md": "新手 90% 的性能问题出在输入管道。症状：GPU 空转、`cudaMemcpy` 等待、CPU 算子耗时异常。\n\n**调 num_workers**：DataLoader 的多进程加载，经验从 0 开始逐级试：\n\n```python\nDataLoader(ds, batch_size=256, num_workers=4,\n           pin_memory=True, persistent_workers=True,\n           prefetch_factor=2)\n```\n\n- `num_workers=0`：主进程亲自解码图片，GPU 必等——大忌\n- 逐步加到 4、8：单步耗时下降说明有效；**不再下降甚至回升**（进程开销/磁盘打满）就停\n- 经验起点：CPU 核数的一半，图片解码重则更多\n\n**配套三件套**：`pin_memory=True`（锁页内存让 H2D 拷贝走 DMA 异步通道）；`persistent_workers=True`（每 epoch 不重新 fork 进程，小数据集上省大量启动时间）；`prefetch_factor`（每个 worker 预取的 batch 数）。\n\n**更上位的解法是减负**：把 JPEG 解码 + resize + 存盘一次性预处理成缓存张量（`torch.save` 或 LMDB），训练时直接读——解码从每 epoch 重复劳动变成一次性成本。"
+    },
+    {
+      "h": "GPU 侧调优工具箱",
+     "md": "数据跟上后，轮到计算本身提速（按性价比排序）：\n\n**① AMP 混合精度**：`autocast` 上下文 + `GradScaler`（防 fp16 梯度下溢）两件套，一行接入换 1.5–3× 吞吐。\n\n**② 消灭同步点**：`loss.item()`、`print(acc)`、`.cpu()` 都会强制 GPU 停下来把结果交回 Python。原则：训练循环内**只在每 N 步记录一次指标**，且先攒在 GPU 张量里最后统一搬运。\n\n**③ channels_last + TF32**：卷积网络用 `model.to(memory_format=torch.channels_last)` 常有两位数百分比提速；A100 级卡上 `torch.set_float32_matmul_precision('high')` 启用 TF32。\n\n**④ torch.compile**：PyTorch 2.x 图编译器（kernel 融合），`model = torch.compile(model)` 一行接入，典型 1.3–2×，代价是首次编译要等几分钟。\n\n> 组合拳顺序：先 AMP，再 compile，最后 channels_last——每次只改一项并重新 profile，避免无法归因。"
+    },
+    {
+      "h": "与 LLM 的关联：推理延迟是同样的游戏",
+      "md": "今天的方法论在 LLM 世界被推到极致：vLLM 的 PagedAttention 优化 KV cache 的显存搬运，flash attention 用算子融合减少注意力的显存读写，continuous batching 消除请求队列的 GPU 空转——都是「先 profile 找等待点，再消除等待」。\n\n瓶颈二分法也直接复用：**compute-bound**（GEMM 占满）上精度/编译优化；**memory-bound**（小算子搬运多）上融合与缓存。对 Agent 开发者，排查慢 Agent（模型调用？工具 IO？）就是应用层的 profiling。"
+    }
+  ],
+  "keyPoints": [
+    "第一定律：没有 profile 的优化是猜谜；先测量，只优化占比前三的热点",
+    "迭代 = 数据准备→H2D→前向→反向→step，目标是让数据准备被 GPU 计算完全覆盖",
+    "读 profiler 表：按 Self CUDA 排序；copy_/item/to 类算子靠前 = 瓶颈在搬运与同步",
+    "num_workers 从 0 逐级上调（起点 ≈ CPU 核数一半），不再提速即停；配合 pin_memory + persistent_workers",
+    "根治数据瓶颈：离线预处理成缓存张量，把每 epoch 的解码变成一次性成本",
+    "GPU 工具箱按性价比：AMP → 消灭 .item() 同步点 → channels_last/TF32 → torch.compile；一次只改一项",
+    "瓶颈二分法：compute-bound 上精度/编译优化，memory-bound 上融合与减少搬运——LLM 推理优化同源"
+  ],
+  "quiz": [
+    {
+      "q": "profile 显示 GPU 时间轴有大段空白，且 aten::copy_ 与等数据的记录很多，最可能的瓶颈是？",
+      "options": ["模型太大", "数据加载/搬运跟不上，GPU 在挨饿", "学习率设置错误", "损失函数收敛太慢"],
+      "answer": 1,
+      "explain": "GPU 空转 = 它在等输入或等同步。copy_ 等搬运算子占比高是输入管道瓶颈的典型指纹，应从 num_workers/pin_memory/预处理缓存入手。"
+    },
+    {
+      "q": "num_workers 调优的正确做法是？",
+      "options": ["永远设成最大值", "从 0 逐级上调（如 2/4/8），观察单步耗时，不再下降即停", "设成 GPU 数量", "设成 batch 大小"],
+      "answer": 1,
+      "explain": "worker 过少 GPU 挨饿，过多则进程调度与内存开销反噬，最优点因数据集与磁盘而异——只有逐级实测能找到。"
+    },
+    {
+      "q": "训练循环里每步都执行 `loss.item()` 用于打印，为什么可能拖慢训练？",
+      "options": ["item 计算量太大", "强制 CPU 与 GPU 同步，打断异步流水，GPU 停下来等结果", "会污染梯度", "增加显存占用"],
+      "answer": 1,
+      "explain": ".item()/.cpu()/print 都要求结果立即可用，触发隐式同步，CUDA 流水线被排空。应每 N 步记录一次，或先在 GPU 上累积再统一取回。"
+    },
+    {
+      "q": "以下哪项优化主要解决的是 memory-bound（带宽受限）问题？",
+      "options": ["AMP 混合精度", "flash attention 通过算子融合减少显存读写", "增大 batch size", "换更大的模型"],
+      "answer": 1,
+      "explain": "标准注意力的瓶颈是把大矩阵写回显存再读出做 softmax；融合进单个 kernel 显著减少 HBM 往返。AMP 主要提升算力利用，batch/模型大小与瓶颈类型无关。"
+    },
+    {
+      "q": "按课程建议的调优顺序与纪律，正确的是？",
+      "options": ["一次性套用所有优化拿到最快结果", "先 AMP 再 compile 等逐项引入，每次改一项后重新 profile 验证收益", "先换更贵的 GPU", "先改模型结构再测量"],
+      "answer": 1,
+      "explain": "一次改多项无法归因收益与回退；逐项引入 + 重新测量才能建立因果，也是实验管理的基本纪律。"
+    },
+    {
+      "q": "persistent_workers=True 的作用是？",
+      "options": ["让 worker 使用更多内存", "每个 epoch 之间不销毁重建加载进程，省去反复 fork 的启动开销", "提高模型精度", "必须配合 pin_memory 才能生效"],
+      "answer": 1,
+      "explain": "默认每轮 DataLoader 重新拉起 worker 进程；小数据集上这个启动成本占比可观。persistent_workers 让进程常驻，配合 prefetch 流水更稳。"
+    }
+  ]
+}

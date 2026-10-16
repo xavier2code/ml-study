@@ -1,0 +1,71 @@
+{
+  "day": 34,
+  "title": "Phase 1 收尾 + 准备 Phase 2",
+  "sections": [
+    {
+      "h": "为什么要做这次对比",
+      "md": "你已经用 numpy 从零写过 MLP（手写前向 + 手写反向），也用 PyTorch 在 MNIST 上训到了 97%。今天把两者钉在一起：**同一个网络、同一份数据、同一套超参，让两个实现的 loss 轨迹完全一致**。\n\n这不是重复劳动，而是 Phase 1 的「毕业答辩」：\n\n- 如果能对上，说明你真的理解了反向传播，PyTorch 不再是黑盒\n- 如果对不上，误差会精确地指出你哪一步理解错了\n\n结论先说：两份代码算的是**同一个数学**，差异只允许来自浮点误差。"
+    },
+    {
+      "h": "机制：让「结果一致」成立的五个对齐点",
+      "md": "两个实现要可比，必须先消灭一切无关差异：\n\n1. **同一初始化**——把 numpy 的 W1/b1 直接拷进 `nn.Linear` 的 `.weight.data`，而不是各自随机初始化\n2. **同一批数据顺序**——shuffle 用同一个随机排列生成 batch\n3. **同一优化器语义**——用无 momentum 的纯 SGD，`lr` 相同；先在 numpy 侧手动 `W -= lr * dW` 对齐\n4. **同一损失定义**——交叉熵要统一是否对 batch 取平均、是否做 log-sum-exp 稳定化\n5. **同一 dtype**——都选 float64（`torch.float64`），避免精度差异干扰排查\n\n对齐后的验收标准：每步 forward 的 logits 差异 < 1e-10；`loss.backward()` 得到的梯度与手写梯度差异 < 1e-9；训练 3 个 epoch 后 loss 曲线肉眼重合。"
+    },
+    {
+      "h": "并排看两份训练循环",
+      "md": "numpy 版（你写过的心智模型）：\n\n```python\nh = X @ W1 + b1\na = np.maximum(h, 0)\nlogits = a @ W2 + b2\nloss = ce_mean(logits, y)\n# 反向：链式法则手推\ndlogits = (softmax(logits) - onehot(y)) / len(y)\ndW2 = a.T @ dlogits; da = dlogits @ W2.T\ndh = da * (h > 0)\ndW1 = X.T @ dh; W1 -= lr * dW1  # 以此类推\n```\n\nPyTorch 版：\n\n```python\nmodel = nn.Sequential(\n    nn.Linear(784, 128), nn.ReLU(),\n    nn.Linear(128, 10))\nopt = torch.optim.SGD(model.parameters(), lr=lr)\nfor xb, yb in loader:\n    opt.zero_grad()\n    loss = F.cross_entropy(model(xb), yb)\n    loss.backward()\n    opt.step()\n```\n\n| 环节 | numpy 手写 | PyTorch |\n|---|---|---|\n| 前向 | 手写矩阵乘 | `model(xb)` |\n| 反向 | 手推链式法则 | `loss.backward()` 自动微分 |\n| 更新 | 手写 `W -= lr·dW` | `opt.step()` |\n| 求梯度于哪 | 无需记录 | 动态计算图记录 |\n| 设备 | CPU | 一行 `.to('cuda')` |\n\n注意 `opt.zero_grad()`：PyTorch 的梯度默认**累积**而非覆盖，漏掉这行等于用了超大的历史梯度。"
+    },
+    {
+      "h": "对不上时的调试清单",
+      "md": "如果 loss 轨迹分叉，按命中率排序排查：\n\n- **忘记除以 batch size**：手写 `(softmax - onehot)` 忘了 `/B`，等效学习率放大了几十倍\n- **矩阵转置方向搞反**：`a.T @ dlogits` 写成 `dlogits.T @ a`，形状恰好相同但数值全错——用 `np.allclose` 逐层比对梯度，第一处失配就在那一层\n- **ReLU 的导数用错位置**：应该是 `(h > 0)` 对未激活值判断，不是对激活后的 a\n- **交叉熵实现不一致**：一边是 sum、一边是 mean\n\n> 方法论：不要盯整条 loss 曲线猜，用**单 batch 梯度检查**——逐层 `print(np.abs(dW_manual - dW_torch).max())`，从输出层往回走，第一层对不上的地方就是 bug 所在。这也是明天之后「数值梯度检查」的思想雏形。"
+    },
+    {
+      "h": "Blog：为什么我们需要 PyTorch",
+      "md": "用今天的一手体验写这篇 blog（存 `docs/`），论据全部来自你自己的实验，而不是背诵官方文档。提纲建议：\n\n1. **自动微分换掉了最容易错的工种**——你亲测手写 backward 的出错点（转置、除 B、ReLU 位置），而 `backward()` 一行搞定且永不出错\n2. **规模**——128 隐层手写尚可，GPT-3 有 1750 亿参数，手写梯度行数与参数类别同阶增长，人力不可行\n3. **GPU 与生态**——同一个循环 `.to('cuda')` 就能迁移；DataLoader、混合精度、分布式都是现成原语\n\n**与 LLM/Agent 的关联**：nanoGPT 的训练循环和今天的 MNIST 循环**结构完全相同**（forward → loss → backward → step），只是模型换成 Transformer、数据换成 token 序列、优化器换 AdamW。学会的不是「PyTorch 语法」，而是这个循环本身。\n\n预告 Phase 2：明天开始手推链式法则的矩阵版，把 autograd 做的事自己再做一遍——不是要替代它，而是让它永远不再是黑盒。"
+    }
+  ],
+  "keyPoints": [
+    "对齐实验五要素：同初始化、同 batch 顺序、同优化器语义、同损失定义、同 dtype",
+    "验收标准：logits 差 < 1e-10、梯度差 < 1e-9、loss 轨迹肉眼重合——两份代码算的是同一个数学",
+    "opt.zero_grad() 必须存在：PyTorch 梯度默认累积而非覆盖",
+    "梯度调试方法论：单 batch 逐层 allclose，从输出层往回找第一处失配",
+    "GPT 训练循环与 MNIST 循环同构：forward → loss → backward → step"
+  ],
+  "quiz": [
+    {
+      "q": "对比实验中，把 numpy 权重直接拷贝进 nn.Linear 而不是两边各自随机初始化，主要目的是？",
+      "options": ["加快训练速度", "保证唯一差异是实现本身，从而能互相验证正确性", "减少显存占用", "让 PyTorch 结果更好看"],
+      "answer": 1,
+      "explain": "初始化不同会让 loss 轨迹从一开始就分叉，你就再也无法区分「实现错了」和「起点不同」。钉死同一起点，差异只能来自实现。"
+    },
+    {
+      "q": "漏写 `opt.zero_grad()` 会发生什么？",
+      "options": ["什么都不会发生，梯度会自动清零", "梯度逐 batch 累积，等效学习率不断放大，训练发散", "loss 变成 NaN 立刻报错", "模型只更新输出层"],
+      "answer": 1,
+      "explain": "PyTorch 的 .grad 默认是累加语义（为支持梯度累积等场景），漏掉清零等于把历史所有 batch 的梯度加在一起用。"
+    },
+    {
+      "q": "两个实现「结果一致」的合理标准是？",
+      "options": ["loss 逐位完全相同，一个比特都不能差", "logits/梯度差异在浮点误差量级（如 1e-9 内），loss 轨迹肉眼重合", "最终准确率都超过 97% 即可", "训练 100 轮后 loss 都降到 0.01 以下"],
+      "answer": 1,
+      "explain": "浮点运算顺序不同会带来 1e-9 级别的舍入差异，追求逐位相同既不可能也无必要；判断「同一数学」看的是误差量级。"
+    },
+    {
+      "q": "手写 numpy 反向传播时，`(softmax - onehot)` 忘记除以 batch size，症状是？",
+      "options": ["梯度全为零", "形状报错", "等效学习率放大了约 batch size 倍，loss 震荡或发散", "只影响最后一层，其余层正常"],
+      "answer": 2,
+      "explain": "交叉熵对 batch 取平均时梯度要除以 B，漏掉后所有梯度放大 B 倍，等于悄悄调了一个巨大的学习率。"
+    },
+    {
+      "q": "单 batch 梯度检查时发现输出层梯度一致、第一隐层梯度失配，最可疑的环节是？",
+      "options": ["交叉熵的实现", "输出层到隐层之间的反向传播代码（如 ReLU 分支或转置）", "数据加载", "学习率设置"],
+      "answer": 1,
+      "explain": "梯度从输出层往回传播：越靠后的环节正确，bug 越靠前——第一个失配层与其上一层之间的反向代码就是嫌疑范围。"
+    },
+    {
+      "q": "关于「PyTorch 与手写 numpy 的关系」，最准确的说法是？",
+      "options": ["PyTorch 用了与链式法则不同的求导原理", "backward() 就是在自动执行链式法则，与手推结果数学等价", "手写梯度一定比 autograd 更快", "大规模模型只能手写梯度"],
+      "answer": 1,
+      "explain": "autograd 在动态计算图上做的正是链式法则的自动执行，数值上与手推一致——这正是今天对比实验能对上的原因。"
+    }
+  ]
+}

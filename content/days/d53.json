@@ -1,0 +1,72 @@
+{
+  "day": 53,
+  "title": "数据增强",
+  "sections": [
+    {
+      "h": "最强的正则化来自数据",
+      "md": "模型记住训练集是因为「见过太少的变体」。与其加正则项，不如**制造变体**：水平翻转的猫还是猫、裁掉一角的猫还是猫。数据增强用先验知识免费扩充数据集，是视觉任务性价比最高的技术。\n\n核心原则（判断一切增强的标尺）：**变换后的图片是否保持标签不变？**\n\n- 猫/狗：水平翻转 ✓；垂直翻转通常不做（分布里没有倒立猫）\n- 数字 6/9：旋转 180° 会换标签 ✗\n- 医疗影像/工业检测：颜色变换可能破坏诊断特征，慎用\n\n> LLM 关联：NLP 增强难做（同义词替换常改变语义），LLM 的正则主要靠 dropout/weight decay；但 instruction tuning 里「同一指令多种问法」本质上就是数据增强。"
+    },
+    {
+      "h": "基础增强：flip / crop / color jitter",
+      "md": "三件套覆盖 90% 收益，全是「标签必然不变」的变换：\n\n```python\nfrom torchvision import transforms as T\ntrain_tf = T.Compose([\n    T.RandomCrop(32, padding=4),     # 随机平移：先 pad 4 再裁 32\n    T.RandomHorizontalFlip(),        # 50% 概率水平翻转\n    T.ColorJitter(0.2, 0.2, 0.2),    # 亮度/对比度/饱和度各 ±20%\n    T.ToTensor(),\n    T.Normalize(CIFAR_MEAN, CIFAR_STD),\n])\n```\n\n- **RandomCrop(32, padding=4)**：目标在 ±4 像素内平移——教网络「位置不重要」，是平移不变性的数据版。RandomResizedCrop 更强：随机缩放+裁剪（ImageNet 标配）\n- **Flip**：零成本翻倍数据\n- **ColorJitter**：光照鲁棒性\n\n关键机制：增强只作用于**训练集**；验证/测试集永远用确定性变换（ToTensor + Normalize）。每个 epoch 同一张图看到不同变体——等效于无限数据集。CIFAR-10 + ResNet-20 上，光 flip+crop 就能从 ~88% 提到 ~91%。"
+    },
+    {
+      "h": "进阶：MixUp / CutOut / CutMix",
+      "md": "这一代增强**混合多张图**，标签也按比例混合，把硬标签变成软标签：\n\n**CutOut（2017）**：随机把一个 16×16 方块置零。强迫网络不依赖单一局部特征（不能只看猫耳朵）。\n\n**MixUp（2018）**：两张图线性混合，标签同比例：\n\n```\nx̃ = λ·xᵢ + (1−λ)·xⱼ     λ ~ Beta(α, α), α≈0.2~1.0\nloss = λ·CE(model(x̃), yᵢ) + (1−λ)·CE(model(x̃), yⱼ)\n```\n\n图像变成「70% 猫 + 30% 卡车」——强迫模型输出平滑的概率分布，显著改善校准与鲁棒性。\n\n**CutMix（2019）**：把图 B 的一个矩形区域贴进图 A，标签按**面积比例**混合——比 MixUp 保留更多真实局部纹理。实现核心：\n\n```python\ndef cutmix(x, y, alpha=1.0):\n    lam = np.random.beta(alpha, alpha)\n    idx = torch.randperm(x.size(0))      # 随机配对另一张图\n    H, W = x.shape[2:]\n    cut = int(H * W * (1 - lam) ** 0.5)  # 由目标 λ 反推边长\n    cy, cx = np.random.randint(H), np.random.randint(W)\n    x[:, :, cy:cy+cut, cx:cx+cut] = x[idx, :, cy:cy+cut, cx:cx+cut]\n    return x, y, idx, 1 - cut*cut/(H*W)  # 实际 λ 按面积重算\n```\n\n细节坑：标签要用软目标（或拆成两项加权损失），不是把 y 直接乘 λ 后 argmax。三者在 CIFAR 上各值 1~2 个点，常可叠加使用。"
+    },
+    {
+      "h": "RandAugment：把增强搜索也自动化",
+      "md": "2018 年 AutoAugment 用强化学习在数据集上搜索最优增强策略，效果好但**搜索成本比训练模型本身还贵**。RandAugment（2020）的反常识发现：根本不用搜——\n\n```\n每个 batch：从 14 种变换中随机抽 N 个，\n每个以统一幅度 M 施加（N 常取 2，M 0~30）\n```\n\n```python\ntrain_tf = T.Compose([\n    T.RandAugment(num_ops=2, magnitude=10),\n    T.RandomHorizontalFlip(),\n    T.ToTensor(), T.Normalize(CIFAR_MEAN, CIFAR_STD),\n])\n```\n\n14 种变换包括旋转、剪切、平移、对比度、锐化、posterize 等。效果与搜索得到的策略相当甚至更好，且两个超参数可全局调——**增强策略本身被降维成了普通超参数**。\n\n实践建议：从 flip+crop 起步 → 收敛后逐个试 CutOut/MixUp → 最后换 RandAugment；一次只改一项，wandb 记录（明天正式用这套方法论冲 88%+）。"
+    },
+    {
+      "h": "今日串联",
+      "md": "增强是**用先验换数据**：基础三件套（flip/crop/jitter）注入几何与光照不变性，混合派（MixUp/CutMix/CutOut）把硬标签软化、逼出平滑决策边界，RandAugment 把策略选择自动化。判据永远是「标签不变」。\n\n明日预告：Phase 2 核心里程碑——用今天的增强 + Day 47 的 LR 调度 + Day 52 的 ResNet-20，把 CIFAR-10 冲到 ≥88%，并用 wandb 记录完整实验。"
+    }
+  ],
+  "keyPoints": [
+    "增强的黄金判据：变换后标签是否必然不变（猫翻转 ✓，数字 6/9 旋转 ✗）",
+    "flip + crop 是性价比之王：教网络平移/翻转不变性，CIFAR 上约 +3 点",
+    "增强只在训练集用；验证/测试必须确定性变换",
+    "MixUp：x̃ = λxᵢ+(1−λ)xⱼ，标签按 λ 软混合，输出更平滑、校准更好",
+    "CutMix 按面积比例贴块混标签，保留局部纹理；CutOut 置零方块防单点依赖",
+    "RandAugment：(N, M) 两个超参从 14 种变换随机采样，免去 AutoAugment 的昂贵搜索"
+  ],
+  "quiz": [
+    {
+      "q": "判断一个数据增强是否可用的黄金标准是？",
+      "options": ["是否让 loss 更低", "变换后的图片标签是否必然不变", "是否计算最快", "是否让图片更清晰"],
+      "answer": 1,
+      "explain": "增强 = 用「标签不变的变换」扩充数据分布；一旦存在换标签的样本（如 6 旋转成 9），就在注入标签噪声，得不偿失。"
+    },
+    {
+      "q": "RandomCrop(32, padding=4) 在 32×32 的 CIFAR 上起什么作用？",
+      "options": ["压缩图像尺寸省显存", "目标在 ±4 像素内随机平移，用数据教网络平移不变性", "去除图像噪点", "增加通道数"],
+      "answer": 1,
+      "explain": "先在四周 pad 4 再随机裁回 32，等于随机平移；每个 epoch 位置不同，网络无法依赖绝对位置记样本。"
+    },
+    {
+      "q": "MixUp 中 λ = 0.7 混合猫图与卡车图，正确的标签处理是？",
+      "options": ["标签取猫（谁的 λ 大听谁的）", "标签变为 0.7 猫 + 0.3 卡车的软目标，损失按比例加权", "标签随机二选一", "标签丢弃"],
+      "answer": 1,
+      "explain": "MixUp 的核心就是软标签：loss = 0.7·CE(out, 猫) + 0.3·CE(out, 卡车)，强迫模型输出与混合比例一致的置信度，改善校准与鲁棒性。"
+    },
+    {
+      "q": "CutMix 相对 MixUp 的主要优势是？",
+      "options": ["计算更便宜", "贴入的矩形区域保留真实局部纹理，标签按面积比例混合，特征学习信号更强", "不需要超参数", "能用于文本"],
+      "answer": 1,
+      "explain": "MixUp 的整图线性混合会模糊纹理；CutMix 局部区域是原图像素，网络仍能学到清晰的局部特征，标签按贴入面积比例混合。"
+    },
+    {
+      "q": "RandAugment 的核心思想是？",
+      "options": ["固定使用最强的三种增强", "每 batch 从 N 种变换里随机抽若干个以统一幅度施加，用两个超参代替昂贵搜索", "按数据集自动生成新变换", "只在测试时增强"],
+      "answer": 1,
+      "explain": "AutoAugment 在数据集上搜索策略太贵；RandAugment 证明随机采样 + 两个全局超参（变换个数 N、幅度 M）就能达到相当效果，还更易迁移。"
+    },
+    {
+      "q": "增强变换应该作用于哪些数据？",
+      "options": ["训练、验证、测试全部", "仅训练集；验证/测试用确定性变换保证可比性", "仅测试集", "仅验证集"],
+      "answer": 1,
+      "explain": "验证/测试是评估基准，必须确定可复现；随机增强只用于训练，让每个 epoch 看到不同变体、等效无限数据。"
+    }
+  ]
+}

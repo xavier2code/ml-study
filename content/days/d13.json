@@ -1,0 +1,72 @@
+{
+  "day": 13,
+  "title": "XGBoost + 评估指标",
+  "sections": [
+    {
+      "h": "为什么 XGBoost 统治表格数据",
+      "md": "Kaggle 十年赛事的结论：**结构化/表格数据上，梯度提升树几乎总是最强**（深度学习占优的是图像、文本、音频）。XGBoost 是梯度提升树的高效实现，LightGBM 是微软的更快变体（直方图分裂 + 叶子优先生长，大数据集上常快一个量级）。\n\n与随机森林的根本区别回顾（明天细讲）：RF 是**并行**长出一片独立的树再投票；Boosting 是**串行**生长，每棵新树专门修复前面所有树的残差错误。RF 降方差，Boosting 降偏差。\n\n先建立直觉再看机制，最后一节手算评估指标——今天信息量大，动手环节集中在 Titanic 调优上。"
+    },
+    {
+      "h": "梯度提升的机制",
+      "md": "以回归为例（分类同理，用 logit）：\n\n```\n初始预测 F₀(x) = 均值（很粗糙）\n重复 M 轮：\n  1. 计算残差 = y - F(x)\n     （严格说是负梯度 -∂L/∂F，MSE 时恰等于残差）\n  2. 拟合一棵小树 hₜ(x) 去预测残差\n  3. 更新 F(x) ← F(x) + η·hₜ(x)\n```\n\n直觉：**纠错教练**。第一棵树先给个粗答案，后面每棵树只研究「上一轮还差多少」，逐步补齐。η（learning_rate）控制每步走多小——步子小、轮数多，通常泛化更好。\n\n### XGBoost 的工程创新\n\n- **二阶泰勒展开**目标函数（用到一阶+二阶梯度），给出更精准的分裂增益公式\n- **正则化内置**：目标函数里直接含 γ·叶子数 + ½λ·Σw²，剪枝是优化的自然结果\n- **列抽样、行抽样**：把 RF 的随机化也吸收进来\n- **工程**：并行找分裂、缺失值自动学习默认方向、缓存友好\n\n```python\nfrom xgboost import XGBClassifier\nclf = XGBClassifier(n_estimators=400, learning_rate=0.05, max_depth=4,\n                    subsample=0.8, colsample_bytree=0.8,\n                    eval_metric='logloss', early_stopping_rounds=30)\nclf.fit(X_tr, y_tr, eval_set=[(X_te, y_te)], verbose=False)\n```\n\n> `early_stopping_rounds`：验证集连续 30 轮无提升就停——防过拟合 + 省时间，实战必开。"
+    },
+    {
+      "h": "评估指标：accuracy 不够用",
+      "md": "1000 人里 5 个病人，模型无脑全预测「健康」→ 准确率 99.5%，却一个病人都没抓住。所以需要混淆矩阵体系。\n\n| 预测\\真实 | 正类 | 负类 |\n|---|---|---|\n| 正 | TP | FP |\n| 负 | FN | TN |\n\n```\naccuracy  = (TP+TN) / 全部\nprecision = TP / (TP+FP)   「报出来的有多少真」\nrecall    = TP / (TP+FN)   「真阳性抓回多少」\nF1        = 2PR / (P+R)    调和平均，惩罚偏科\n```\n\n**手算例**：模型输出 20 个正预测，其中 14 个对；实际正类共 50 个。P = 14/20 = 0.70，R = 14/50 = 0.28，F1 = 2×0.7×0.28/(0.98) ≈ 0.40。\n\n**选指标的领域逻辑**：癌症筛查要高 recall（漏诊代价大）；垃圾邮件拦截要高 precision（误杀正常邮件代价大）。\n\n### ROC-AUC\n\nROC 曲线：横轴 FPR（假正率），纵轴 TPR（真正率），扫过所有分类阈值。**AUC = 随机取一正一负样本，正样本得分更高的概率**——与阈值无关，衡量排序能力。0.5 = 瞎猜，0.8+ = 不错。Titanic 这类不平衡不严重时 accuracy 也可看，但 AUC 更稳健。\n\n```python\nfrom sklearn.metrics import classification_report, roc_auc_score\nprint(classification_report(y_te, clf.predict(X_te)))\nprint('AUC:', roc_auc_score(y_te, clf.predict_proba(X_te)[:, 1]))\n```"
+    },
+    {
+      "h": "Titanic 上调优 XGBoost",
+      "md": "沿用 Day 12 的 pipeline 思路（树模型可以少吃 one-hot，标签编码也行）。调参顺序按影响力排：\n\n1. **n_estimators + learning_rate**：先固定 lr=0.05，靠 early stopping 找最优轮数\n2. **max_depth / min_child_weight**：控制单树复杂度（Titanic 上 depth 3–5 通常最优，小数据集容易过拟合）\n3. **subsample / colsample_bytree**：0.7–0.9 之间增加随机性\n4. **reg_lambda**：L2 正则，一般默认 1 已可\n\n**典型结果**：特征工程适当时 public LB 从 LR 的 ≈0.76 提到 0.78–0.80。注意 Titanic 测试集只有 418 行，LB 分数本身抖动 ±0.01 很正常——这正是后天交叉验证要解决的问题。\n\n**LightGBM 差异速记**：`num_leaves`（叶子数）替代 max_depth 表达容量、直方图算法更快、小数据集（<1 万行）有时不如 XGBoost 稳，需关掉过强的直方图分桶。"
+    },
+    {
+      "h": "与 LLM/Agent 的关联 + 今日串联",
+      "md": "- **评估指标思维直接迁移**：LLM 评测里的 precision@k、recall@k 与今天完全同构——检索增强（RAG）中「召回的相关文档比例」就是 recall\n- **残差纠错思想**：GBDT 串行修复错误 ≈ RLHF 的迭代式策略改进、boosting 式 rejection sampling；Agent 系统里「审查员模型修复主模型输出」也是 boosting 的组织形式\n- **Agent 落地**：路由/风控/资源调度这类表格日志任务，XGBoost baseline 至今仍是工业默认\n\n今日串联：Boosting = 串行拟合残差 + 小步长 + 内置正则化；指标体系 = 混淆矩阵衍生家族，按业务代价选主指标。明天把 Day 12–13 的积累组合成完整 Titanic 项目闭环。\n\n动手清单：Titanic 上 XGB 训练 + classification_report + AUC 全套；手算一遍上面那组 P/R/F1；调 max_depth 从 3 扫到 8 看训练/验证分变化。"
+    }
+  ],
+  "keyPoints": [
+    "Boosting 串行拟合负梯度（MSE 下即残差），每棵树修复前面的错误，η 小步慢走泛化好",
+    "XGBoost：二阶泰勒目标函数内置 γ·叶子数+½λ·Σw² 正则，early stopping 实战必开",
+    "precision=报出的有多真，recall=真阳性抓回多少，按漏报/误报的业务代价选主指标",
+    "F1 是 P 和 R 的调和平均，惩罚偏科；手算：P=14/20、R=14/50 → F1≈0.40",
+    "AUC = 正样本得分高于负样本的概率，衡量排序能力、与阈值无关，0.5 为瞎猜",
+    "调参顺序：n_estimators+lr → 树深/叶子 → 行列抽样 → reg_lambda"
+  ],
+  "quiz": [
+    {
+      "q": "梯度提升中每棵新树拟合的目标是？",
+      "options": ["原始标签 y", "前面所有树累计预测的残差（负梯度）", "随机噪声", "特征的均值"],
+      "answer": 1,
+      "explain": "每轮计算当前集成的负梯度（MSE 下恰是残差 y-F(x)），新树专门学习修复这个误差，串行累加。"
+    },
+    {
+      "q": "1000 样本含 5 个正类，全预测负的模型 accuracy 是多少？说明了什么？",
+      "options": ["99.5%，说明模型很好", "99.5%，说明不平衡数据下 accuracy 会掩盖 recall=0 的失效", "0.5%，说明模型很差", "无法计算"],
+      "answer": 1,
+      "explain": "955 个负类全对，accuracy=(995)/1000=99.5%，但 recall=TP/(TP+FN)=0/5=0——关键阳性一个没抓到。"
+    },
+    {
+      "q": "模型 20 个正预测中 14 个正确，实际正类共 50 个。precision 和 recall 分别是？",
+      "options": ["P=0.70, R=0.28", "P=0.28, R=0.70", "P=0.70, R=0.70", "P=0.14, R=0.50"],
+      "answer": 0,
+      "explain": "P=14/20=0.70；R=14/50=0.28。F1≈0.40。precision 看预测侧，recall 看真实侧。"
+    },
+    {
+      "q": "ROC-AUC = 0.5 意味着什么？",
+      "options": ["模型一半预测正确", "模型对正负样本的排序能力等同随机猜测", "阈值为 0.5", "模型完美"],
+      "answer": 1,
+      "explain": "AUC 的概率解释：随机抽一正一负，正样本得分更高的概率。0.5 即排序与抛硬币无异，模型无判别力。"
+    },
+    {
+      "q": "癌症初筛系统应优先保证哪个指标，为什么？",
+      "options": ["precision，因为误报浪费算力", "recall，因为漏诊（FN）的代价远大于误报", "accuracy，因为它最全面", "AUC，因为它是概率"],
+      "answer": 1,
+      "explain": "漏掉一个真病人的代价（延误治疗）远高于多查一次的代价，所以宁可多召回、容忍 precision 低一些。"
+    },
+    {
+      "q": "XGBoost 的 early_stopping_rounds=30 的作用是？",
+      "options": ["每 30 棵树剪一次枝", "验证集指标连续 30 轮不提升就停止添加树，防过拟合省时间", "把学习率除以 30", "限制树的深度为 30"],
+      "answer": 1,
+      "explain": "boosting 轮数多了会开始拟合噪声；用验证集监控，无提升即停，自动找到近似最优的 n_estimators。"
+    }
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "day": 110,
+  "title": "用 TRL 做 DPO",
+  "sections": [
+    {
+      "h": "端到端收官：三代模型同台",
+      "md": "这是对齐三部曲的最后一环：**base → SFT → DPO**。今天用 TRL 的 DPOTrainer 把昨天备好的 5K 偏好对灌进 SFT 模型，然后让三代模型同台对比，亲眼验证「对齐」到底改变了什么。\n\n直觉回顾：SFT 教会「怎么答」，DPO 教会「答得更好」——拉大好答案与坏答案的概率差。两步加起来，才是用户口中「听话又有用」的助手。\n\n与 Agent 关联：完整的 base→SFT→DPO 流水线是当前开源社区部署 Agent 基座的标准路径（Zephyr、很多中文开源模型同款配方），今天走通即拥有可复制的生产配方。"
+    },
+    {
+      "h": "DPOTrainer 配置",
+      "md": "DPOTrainer 需要两个模型：**policy**（要训的 SFT 模型）和 **ref_model**（冻结的同一 SFT 模型，充当 KL 锚点）：\n\n```python\nfrom trl import DPOTrainer, DPOConfig\n\npolicy = AutoModelForCausalLM.from_pretrained(\"./ckpt/minillama-sft\")\nref    = AutoModelForCausalLM.from_pretrained(\"./ckpt/minillama-sft\")\n\ncfg = DPOConfig(\n  output_dir=\"./dpo_out\",\n  beta=0.1,                       # 昨天推导里的 β\n  learning_rate=5e-7,             # 比 SFT 又小 ~40 倍！\n  per_device_train_batch_size=4,\n  gradient_accumulation_steps=8,  # 偏好对要双倍前向，显存压力大\n  num_train_epochs=1,\n  max_length=1024, max_prompt_length=512,\n  bf16=True, logging_steps=10,\n)\ntrainer = DPOTrainer(\n  model=policy, ref_model=ref, args=cfg,\n  train_dataset=load_jsonl(\"data/dpo_zh_5k.jsonl\"),\n  processing_class=tok,\n)\ntrainer.train()\n```\n\n三个关键数字：\n\n- lr 5e-7：DPO 的概率比值对参数极其敏感，lr 稍大语言能力即损\n- epoch=1：偏好对极易过拟合，一轮足矣\n- batch 更小 + 累积更多：每个样本要 forward 四次（policy/ref × chosen/rejected）"
+    },
+    {
+      "h": "读懂 DPO 训练日志",
+      "md": "DPO 日志比 SFT 多几个指标，对应昨天公式里的量：\n\n| 指标 | 含义 | 健康形态 |\n|---|---|---|\n| losses/dpo | 总损失 | 平滑下降 |\n| rewards/accuracies | policy 更偏好 chosen 的比例 | 从 0.5 升向 0.7+ |\n| rewards/margins | Δ_chosen − Δ_rejected | 稳步扩大 |\n| rewards/chosen、rejected | 各自相对 ref 的对数概率比 | chosen 升、rejected 降 |\n\n如果 margins 一直在 0 附近不动、accuracies 停在 0.5：模型分不出好坏——先怀疑数据分差不够或 lr 太小。如果 rejected 的 reward 一路狂降而 chosen 也跟着掉：β 太小，策略漂移伤语言，回调 β 并回滚。\n\n> 口诀：**看 margins 别只看 loss**。loss 降可能是「双双变差、差值变大」，只有 margins 扩大且 chosen 不塌，才是真学到偏好。"
+    },
+    {
+      "h": "评估：三代同台对比",
+      "md": "训完立刻做与 d105 同规格的对比实验：\n\n**1. 生成对比**。用固定 10 prompt（就是 base 评估那套），三代模型各生成 3 条，同一打分表：\n\n```\nprompt：请用一句话解释什么是过拟合\nbase： 过拟合是机器学习中的过拟合现象过拟合…（复读机）\nsft：  过拟合是指模型在训练集上表现很好…… ✓\ndpo：  过拟合是模型记住了训练数据的细节而未学到规律，就像背题不懂题 ✓ 更准更稳\n```\n\n**2. PPL 对照**：base ≈54.6（d105 基线），SFT 后 PPL 略变，DPO 后 PPL **允许略升**——对齐税：模型从「像语料」转向「像助手」，通用续写困惑度自然涨一点，换的是可用性。\n\n**3. 偏好胜率**：留 200 条没参与训练的偏好对做验证集，比较 DPO 前后 policy 给 chosen 的概率是否压过 rejected，胜率应明显提升。\n\n| 维度 | base | SFT | DPO |\n|---|---|---|---|\n| 听指令 | ✗ | ✓ | ✓ |\n| 回答质量 | 低 | 中 | 高 |\n| PPL | 基线 | ≈持平 | 略升（可接受） |\n| 偏好胜率 | ~0.5 | ~0.5 | 0.7+ |"
+    },
+    {
+      "h": "今日串联 + Week 16 预告",
+      "md": "至此你完成了普通人一年都未必走完的路径：从熵和 numpy 出发，亲手预训练了 LLM，又用 SFT + DPO 完成对齐。三个 checkpoint、一条可复制的工业流水线、一套自建评估闭环——这是 Phase 3 交给你的终极武器。\n\n复盘三条主线：数据（语料→指令→偏好对格式逐层演进）、目标（交叉熵→masked 交叉熵→DPO 损失）、评估（PPL→打分表→偏好胜率）。每一层都在前一层上加一个约束，这正是大模型工程的思维方式。\n\n下周预告：进入推理与部署——量化、KV cache 原理、vLLM，让这个模型真正跑起来为用户服务。"
+    }
+  ],
+  "keyPoints": [
+    "DPOTrainer 双模型：policy（SFT 模型，可训）+ ref_model（同一 SFT 模型，冻结当 KL 锚点）",
+    "关键超参：lr ≈5e-7（比 SFT 再小约 40 倍）、epoch=1、beta=0.1 起步",
+    "日志四件套：rewards/accuracies（0.5→0.7+）、margins 扩大、chosen 升 rejected 降；只看 loss 会误判",
+    "对齐税：DPO 后通用 PPL 允许略升——从「像语料」转向「像助手」的合理代价",
+    "评估闭环：固定 prompt 打分表（沿用 d105）+ 留出 200 条偏好对测胜率"
+  ],
+  "quiz": [
+    {
+      "q": "DPOTrainer 的 ref_model 应该是哪个模型？",
+      "options": ["预训练 base 模型", "与 policy 相同初始化的 SFT 模型副本，全程冻结", "奖励模型", "随机初始化的新模型"],
+      "answer": 1,
+      "explain": "DPO 的概率比 π/π_ref 衡量「相对谁的改动」——锚点必须是训练起点的同一个 SFT 模型。用 base 或随机模型做 ref 会让偏好信号失去基准。"
+    },
+    {
+      "q": "DPO 的学习率（≈5e-7）比 SFT（≈2e-5）又小几十倍，主要原因是？",
+      "options": ["为了省显存", "DPO 优化的是对数概率比，参数微小改动就能大幅改变比值，大步长会立刻伤语言能力", "偏好数据太少", "TRL 库的硬性限制"],
+      "answer": 1,
+      "explain": "比值对 θ 的敏感度远高于绝对概率：lr 过大时 chosen/rejected 双双塌掉、生成质量骤降。极小 lr 是 DPO 实践的第一铁则。"
+    },
+    {
+      "q": "训练日志里 losses/dpo 在降，但 rewards/margins 停在 0、accuracies 停在 0.5。最可能的问题是？",
+      "options": ["训练正常，等就行", "模型分不出好坏：偏好对分差不足（数据质量差）或学习信号太弱", "显存不足", "tokenizer 不匹配"],
+      "answer": 1,
+      "explain": "accuracies=0.5 等于抛硬币，说明 policy 对 chosen 没有形成偏好——优先怀疑偏好对本身对比不显著（分差/长度差问题），其次查 lr 是否过小。"
+    },
+    {
+      "q": "DPO 之后模型通用文本的 PPL 略微上升，这个现象说明？",
+      "options": ["训练失败，必须重跑", "「对齐税」：模型从模仿语料转向助手行为，通用续写困惑度略涨是可接受代价", "数据泄漏", "β 设为 0 了"],
+      "answer": 1,
+      "explain": "对齐改变的是行为分布而非语言能力度量基准；PPL 衡量的是「像通用语料」的程度，助手化后略升正常。但若 PPL 暴涨伴随生成混乱，则是 β 太小导致的漂移伤。"
+    },
+    {
+      "q": "评估 DPO 效果为什么要留 200 条未参与训练的偏好对？",
+      "options": ["凑够 5000 条", "在训练外样本上测 policy 是否稳定偏向 chosen，检验学到的偏好是否泛化而非记忆", "加快评估速度", "wandb 需要验证集字段"],
+      "answer": 1,
+      "explain": "训练集上的胜率提升可能只是记忆偏好对；留出集胜率才能证明模型学到了「何为更好」的通用判断，这与分类任务留测试集同理。"
+    },
+    {
+      "q": "回顾 base→SFT→DPO 全程，三个阶段训练目标的演进逻辑是？",
+      "options": ["三个目标互不相干", "同一个 next-token 框架逐层加约束：全量交叉熵 → 只算 assistant 的交叉熵 → chosen/rejected 相对差的偏好损失", "从简单到复杂的无监督聚类", "先 RL 后监督"],
+      "answer": 1,
+      "explain": "预训练学语言（全 token）、SFT 学行为（mask 掉 user）、DPO 学偏好（拉开好坏相对概率）——每一阶段都在前一阶段的目标上加一个更细的约束，这是大模型对齐的完整骨架。"
+    }
+  ]
+}

@@ -1,0 +1,90 @@
+{
+  "day": 26,
+  "title": "MLflow / DVC 入门",
+  "sections": [
+    {
+      "h": "为什么需要实验跟踪",
+      "md": "你已经跑过 Titanic、调过超参、换过特征。回忆一下：**那个准确率 0.81 的模型，用的是哪组特征、哪个种子、哪版代码？**——大概率答不上来。这不是记性问题，是工程问题。\n\n机器学习实验的本质是**高维搜索**：特征方案 × 超参数 × 随机种子，组合爆炸，靠脑子和文件夹名管理必然失控。工业界两类工具解决两件事：\n\n- **MLflow**：跟踪每次运行的参数、指标、产物（模型文件），回答「哪个实验最好、怎么调出来的」\n- **DVC**：给数据和模型文件做版本控制，回答「这个模型是用哪份数据训出来的」\n\n与 LLM 的关联：训练 GPT 级模型一次实验烧几万美金，实验跟踪系统不是锦上添花而是生命线；Agent 调试同样需要记录每轮 prompt 版本与成功率。"
+    },
+    {
+      "h": "MLflow 本地部署：五分钟跑起来",
+      "md": "MLflow 是 pip 就能装的 Python 库，本地模式零配置：\n\n```bash\npip install mlflow\nmlflow ui --port 5000     # 启动本地 Web 界面\n```\n\n核心概念四个，全部围绕**一次运行（run）**：Experiment 是一组相关实验（类比 git 分支），Run 是一次训练执行（类比 commit），Parameters 是输入超参，Metrics 是输出指标。\n\n在 Titanic 脚本里接入只需五行：\n\n```python\nimport mlflow\n\nmlflow.set_experiment(\"titanic-baseline\")\nwith mlflow.start_run():\n    mlflow.log_param(\"model\", \"random_forest\")\n    mlflow.log_param(\"n_estimators\", 200)\n    mlflow.log_metric(\"cv_accuracy\", 0.812)\n    mlflow.log_artifact(\"model.pkl\")   # 存模型文件\n```\n\n跑完后打开 `localhost:5000`，所有 run 排成一张表，可按指标排序、并行对比参数——你已经把「凭记忆」升级成了「凭数据库」。"
+    },
+    {
+      "h": "实战：给 Titanic 实验装上黑匣子",
+      "md": "把之前任何一版 Titanic 代码改造成 MLflow 版。推荐流程：\n\n1. 用 `argparse` 把超参数变成命令行参数（`--n_estimators`、`--max_depth`）\n2. 训练循环外层包 `with mlflow.start_run(run_name=...)`\n3. **入口处** `log_param` 全部超参数 + 数据版本号，**出口处** `log_metric` 交叉验证分数\n4. 挂个循环批量扫参：\n\n```python\nfor n_est in [50, 100, 200, 400]:\n    for depth in [4, 6, 8, None]:\n        run_experiment(n_est, depth)   # 每次调用一个 run\n```\n\n16 个 run 落库后，在 UI 里把 `n_estimators` 设 X 轴、`cv_accuracy` 设 Y 轴画散点，**过拟合的形状自己浮出来**：`max_depth=None` 时训练分漂亮但 CV 掉队——Day 30 要复习的偏差-方差被可视化了。\n\n> 习惯：从今天起，实验不记录就不算跑过——这个纪律在 Phase 2/3 会救你无数次。"
+    },
+    {
+      "h": "DVC：数据也要有 git",
+      "md": "git 管代码很好，但 `git add train.csv` 是灾难：数据集动辄几百 MB 会撑爆仓库，而且 git 对二进制文件只存快照，无法 diff。**DVC（Data Version Control）**的思路是——**git 管元数据，外部存储管大文件**：\n\n```bash\npip install dvc\ndvc init                                  # 在 git 仓库里初始化\ndvc add data/train.csv                    # 数据变成 .dvc 指针文件\ngit add data/train.csv.dvc .gitignore     # 提交指针，不提交数据本身\n```\n\n`train.csv.dvc` 是个小文本文件，记录数据的 **MD5 哈希**；数据本体移进 `.dvc/cache/`，可再推到 S3、网盘等远程存储：\n\n```bash\ndvc remote add -d storage s3://my-bucket/dvc\ndvc push                                 # 数据上传远程仓库\ngit commit -m \"数据 v2：清洗了年龄缺失值\"\n```\n\n**回滚数据** = `git checkout` 旧指针 + `dvc checkout`，按哈希从缓存还原对应版本。配合 MLflow 记录的「数据哈希 + 代码 commit + 参数」，任何历史分数可复现——这就是**可复现性（reproducibility）**，工业界和论文审查的共同底线。"
+    },
+    {
+      "h": "今日串联",
+      "md": "两条主线收束：**MLflow 记录「怎么训的」**（参数→指标→模型），**DVC 记录「用什么训的」**（数据→版本→哈希）。二者合起来构成最小可行的实验管理栈：\n\n| 问题 | 工具 | 关键动作 |\n|---|---|---|\n| 哪组超参最好？ | MLflow | log_param / log_metric |\n| 模型文件在哪？ | MLflow | log_artifact |\n| 用的哪版数据？ | DVC | dvc add / checkout |\n| 如何复现分数？ | 两者 | 数据哈希 + git commit + 参数 |\n\n明日预告：整理知识图谱、写一篇《我理解的 ML》，把散点连成网络。"
+    }
+  ],
+  "keyPoints": [
+    "MLflow 四概念：Experiment > Run > Parameters > Metrics，run 是一次训练执行",
+    "log_param 记输入超参、log_metric 记输出指标、log_artifact 存模型文件",
+    "git 管代码管不了大数据；DVC 用 .dvc 指针文件（含 MD5）+ 外部存储管数据版本",
+    "数据回滚：git checkout 旧指针 + dvc checkout，按哈希还原",
+    "可复现性 = 数据版本（DVC）+ 代码版本（git）+ 参数记录（MLflow）三者齐全"
+  ],
+  "quiz": [
+    {
+      "q": "MLflow 中「一次完整的训练执行」对应哪个概念？",
+      "options": [
+        "Experiment",
+        "Run",
+        "Artifact",
+        "Tag"
+      ],
+      "answer": 1,
+      "explain": "Run 是一次训练执行；Experiment 是一组相关 run 的容器；artifact 是 run 附带的产物文件。"
+    },
+    {
+      "q": "为什么不能直接 `git add` 一个 500MB 的 csv 数据集？",
+      "options": [
+        "git 不支持 csv 格式",
+        "大文件撑爆仓库且二进制无法 diff，历史版本全量快照",
+        "git 会自动压缩所以没问题",
+        "只要加 .gitignore 就能提交"
+      ],
+      "answer": 1,
+      "explain": "git 对二进制只存快照无法增量 diff，每次修改都全量入库，仓库迅速膨胀——所以用 DVC 指针 + 外部存储替代。"
+    },
+    {
+      "q": "`dvc add data/train.csv` 之后，被 git 提交的是什么？",
+      "options": [
+        "train.csv 本体",
+        "train.csv.dvc 指针文件（记录 MD5 哈希）",
+        "压缩后的 zip 包",
+        "什么都不提交"
+      ],
+      "answer": 1,
+      "explain": "数据本体进 .dvc/cache 并从工作区移走，git 只提交小小的 .dvc 文本指针，其中记录数据内容的哈希。"
+    },
+    {
+      "q": "想把 Titanic 实验结果从 0.79 排到 0.81 的那次 run 完整复现，最少需要哪些信息？",
+      "options": [
+        "只要模型文件",
+        "只要超参数",
+        "数据版本 + 代码版本 + 超参数（加随机种子更稳）",
+        "只要随机种子"
+      ],
+      "answer": 2,
+      "explain": "可复现性三要素：哪版数据（DVC 哈希）、哪版代码（git commit）、哪些超参（MLflow log_param）；随机种子也常需固定。"
+    },
+    {
+      "q": "在 MLflow UI 中把 max_depth 从 4 扫到 None，发现训练分数持续上升但 CV 分数先升后降，这说明什么？",
+      "options": [
+        "学习率设错了",
+        "典型的过拟合：树太深记住噪声，偏差-方差的方差端失控",
+        "数据量太大",
+        "MLflow 记录有 bug"
+      ],
+      "answer": 1,
+      "explain": "训练/验证曲线张口是过拟合的经典信号：容量（深度）增加让方差上升，CV 分数掉头向下——正是偏差-方差权衡的可视化。"
+    }
+  ]
+}

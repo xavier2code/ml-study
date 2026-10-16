@@ -1,0 +1,71 @@
+{
+  "day": 148,
+  "title": "Vision Transformer (ViT)",
+  "sections": [
+    {
+      "h": "从 CNN 到 ViT：为什么图像也能用 transformer",
+      "md": "过去十年视觉任务的答案是**卷积**：局部感受野、权值共享、平移等变。但卷积有归纳偏置（inductive bias）——它假设「相邻像素相关、特征与位置无关」。ViT 的核心主张是：**这个偏置可以不要**。只要数据够多，让 transformer 自己从零学视觉规律。\n\n把图像切块（patch）当作 token，一个 224×224 的图切成 16×16 的块就是 196 个 token——图像理解立刻变成语言建模同款问题：序列进、注意力出。这正是 GPT 能直接迁移到视觉的原因，也是后来所有多模态模型（CLIP、Qwen-VL，明天就部署它）的地基。"
+    },
+    {
+      "h": "ViT 机制：patch embedding + CLS token + 位置编码",
+      "md": "ViT 的流水线只有四步：\n\n1. **切块**：图像切为 N 个 P×P 小块（如 16×16），展平成向量\n2. **线性投影**：一个共享的全积层把每块映射到 d 维——等价于 kernel=stride=P 的卷积，这就是 `PatchEmbed`\n3. **加位置编码**：可学习的 1D 位置向量加到每个 token 上，模型才知道块的空间顺序\n4. **CLS token**：在序列最前面拼接一个可学习 token，最后一层它的输出作为整图表示去做分类\n\n```\nz = [x_cls; x1·E; x2·E; …; xN·E] + E_pos\nfor layer in L: z = TransformerBlock(z)\ny = MLP( LN(z_0) )\n```\n\n注意力本身对顺序不敏感，位置编码是唯一的空间信息来源——这也解释了 ViT 在小数据上弱于 CNN：它必须靠数据学会 CNN 天生就会的「局部性」。"
+    },
+    {
+      "h": "论文精读要点：规模就是归纳偏置的替代品",
+      "md": "「An Image is Worth 16×16 Words」(2020) 的实验结论值得背下来：\n\n| 训练数据 | ViT vs ResNet |\n|---|---|\n| ImageNet-1k (~130万) | ViT 略输（缺归纳偏置） |\n| ImageNet-14M / JFT-300M | ViT 明显胜出 |\n\n- 训练成本低：JFT 上预训练的 ViT 计算量约为最优 CNN 的一半\n- 输入分辨率与训练分辨率可不同：推理时对位置编码插值即可\n- 后续补丁（DeiT、MAE）证明：强数据增广 + 蒸馏，小数据也能训好 ViT——今天没人再为视觉专门选 CNN\n\n> 精读时重点看图 3（few-shot 与预训练规模的曲线）和图 5（位置编码相似性的可视化——它自发学出了二维邻接结构）。"
+    },
+    {
+      "h": "动手：PyTorch 实现 ViT-tiny 训 CIFAR-10",
+      "md": "ViT-tiny 的超参：d=192、层数 L=12、头数 3、patch=4（CIFAR 只有 32×32，块要切小）。核心代码不到 40 行：\n\n```python\nclass ViT(nn.Module):\n  def __init__(self):\n    super().__init__()\n    self.patch = nn.Conv2d(3, 192, 4, 4)      # 8×8=64 个 token\n    self.cls = nn.Parameter(torch.randn(1, 1, 192))\n    self.pos = nn.Parameter(torch.randn(1, 65, 192))\n    self.blocks = nn.TransformerEncoder(\n        nn.TransformerEncoderLayer(192, 3, 768,\n        dropout=0.1, batch_first=True), 12)\n    self.head = nn.Linear(192, 10)\n\n  def forward(self, x):\n    x = self.patch(x).flatten(2).transpose(1, 2)\n    x = torch.cat([self.cls.expand(x.size(0), -1, -1), x], 1)\n    x = self.blocks(x + self.pos)\n    return self.head(x[:, 0])\n```\n\n训 200 epoch 能到 ~98%（配合 RandomCrop + flip + label smoothing）。两个调参坑：**没有数据增广时 ViT 过拟合非常快**（第 20 epoch 就验证集崩）；学习率要配 warmup（transformer 对 lr 敏感）。"
+    },
+    {
+      "h": "与 LLM/Agent 的关联",
+      "md": "ViT 是多模态 LLM 的「眼睛」。Qwen-VL、LLaVA 这类模型的前半段就是一个 ViT（通常用 CLIP 预训练的视觉编码器），把图像 token 化后拼进 LLM 的输入序列。理解了今天两件事——**patch→token 的映射**和**位置编码**——你就能看懂任何 VLM 的架构图。\n\n对 Agent 而言：能看图的 Agent 才能读截图、看 UI、分析视频帧。明天部署 Qwen2.5-VL，后天 Whisper——一周后你的 Agent 就有眼睛和耳朵了。"
+    }
+  ],
+  "keyPoints": [
+    "ViT 把图像切成 patch 当 token，视觉问题变成序列建模，与 GPT 共享同一套 transformer 基座",
+    "四步流水线：PatchEmbed 卷积投影 → CLS token → 可学习 1D 位置编码 → 标准编码器栈",
+    "注意力无序，位置编码是唯一空间信息；小数据下 ViT 输给 CNN 是因为缺局部性归纳偏置",
+    "论文核心结论：数据规模（JFT-300M）可替代归纳偏置，DeiT/MAE 后来补上了小数据短板",
+    "CIFAR-10 实现要点：patch=4、强增广防过拟合、lr warmup；VLM 的视觉塔就是预训练 ViT"
+  ],
+  "quiz": [
+    {
+      "q": "224×224 图像用 16×16 的 patch 切块，序列长度（不含 CLS）是多少？",
+      "options": ["196", "224", "256", "14"],
+      "answer": 0,
+      "explain": "每边 224/16=14 块，共 14×14=196 个 patch token；加上 CLS 是 197。"
+    },
+    {
+      "q": "ViT 的位置编码为什么不可缺少？",
+      "options": ["为了降低计算量", "因为自注意力对输入顺序不敏感，没有它所有 patch 的空间信息会丢失", "为了防止梯度消失", "为了支持批量训练"],
+      "answer": 1,
+      "explain": "自注意力把输入当集合处理，打乱 patch 顺序输出不变；位置编码是模型获知空间排列的唯一来源。"
+    },
+    {
+      "q": "关于「ViT 在 ImageNet-1k 上不如 ResNet」，论文给出的解释是？",
+      "options": ["transformer 架构容量太小", "ViT 缺少卷积的局部性等归纳偏置，小数据学不出来；扩大预训练数据即可反超", "ViT 不能用 ReLU 激活", "位置编码参数太多导致过拟合"],
+      "answer": 1,
+      "explain": "核心结论：归纳偏置是「数据的替代品」。JFT-300M 级预训练后 ViT 以更低训练成本反超最优 CNN。"
+    },
+    {
+      "q": "PatchEmbed 用卷积实现时，kernel 和 stride 应该设多少？",
+      "options": ["kernel=3, stride=1", "kernel=P, stride=P，P 为 patch 边长", "kernel=1, stride=P", "kernel=P, stride=1"],
+      "answer": 1,
+      "explain": "不重叠切块要求 kernel=stride=P：每个 patch 恰好被一个卷积窗口覆盖并独立投影成一个 token。"
+    },
+    {
+      "q": "CLS token 的作用是？",
+      "options": ["存储分类标签", "作为一个可学习的聚合 token，其最后一层输出作为整图表示接分类头", "替代位置编码", "加速注意力计算"],
+      "answer": 1,
+      "explain": "CLS 无输入内容、参与所有注意力层，相当于一个学习出来的全局读出槽位；也可用全局平均池化替代。"
+    },
+    {
+      "q": "在 CIFAR-10 上训 ViT-tiny 时验证损失第 20 epoch 就开始恶化，最可能的原因是？",
+      "options": ["模型太小", "缺少数据增广导致过拟合（ViT 无局部偏置，小数据尤其严重）", "学习率太小", "batch size 太大"],
+      "answer": 1,
+      "explain": "无增广的 ViT 在小数据集上过拟合极快；RandomCrop+flip、mixup、label smoothing 是 DeiT 论文给出的标准解法。"
+    }
+  ]
+}

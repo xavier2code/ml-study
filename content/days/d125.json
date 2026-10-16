@@ -1,0 +1,102 @@
+{
+  "day": 125,
+  "title": "MoE (Mixture of Experts) 入门",
+  "sections": [
+    {
+      "h": "条件计算：参数多而算得少",
+      "md": "Scaling law：模型能力跟着**参数量**涨。但 dense 模型每个 token 过全部参数——参数翻倍、成本翻倍。\n\nMoE 的解法是**条件计算**：把 FFN 拆成 N 个「专家」，每 token 只激活 k 个（如 8 选 2）：\n\n- **总参数量** ↑↑（知识容量涨）\n- **每 token 计算量** ≈ 不变\n\n这是 DeepSeek、Mixtral 等「又大又便宜」的秘密。思想不新（1991 年提出，GShard/Switch Transformer 才规模化）。"
+    },
+    {
+      "h": "MoE 层机制",
+      "md": "把 FFN 层换成 MoE，新增三个组件：\n\n**1. Router（路由器）**：小线性层给每个专家打分，选 top-k：\n\n```\ng(x) = softmax(W_r · x)\nidx = topk(g(x), k)          # 8 选 2\n输出 = Σ g_i(x) · Expert_i(x)   # 只对选中者求和\n```\n\n**2. Experts（专家）**：普通 FFN，各自涌现出不同「特长」（代码、数学……专业化非人为指定）。\n\n**3. 负载均衡损失**：初始化偏差可能让某几个专家总被选中，强者愈强、其余饿死（**路由坍缩**）。解法：加辅助损失惩罚分配不均——\n\n```\nL_aux = α · N · Σᵢ fᵢ · Pᵢ\n（fᵢ = 实际分到 i 的 token 比例，Pᵢ = router 给 i 的平均概率）\n```\n均衡时最小；α 是权重系数。"
+    },
+    {
+      "h": "DeepSeek-V2/V3 精读要点",
+      "md": "DeepSeek 系列是开源 MoE 的教科书，抓三件事：\n\n**1. MLA**：把 KV 压进低维潜在向量按需还原——KV cache 直降一个数量级。PagedAttention 从管理层面省 KV，MLA 从**架构层面**解决（呼应 Day 113）。\n\n**2. 细粒度 + 共享专家**：把大 FFN 拆成更多小专家，另设 1 个**共享专家**每 token 必经——承载公共知识，路由专家专注分工。\n\n**3. 无辅助损失负载均衡（V3）**：给路由分加可学习 **bias**，只影响 top-k 选择、不改变输出加权；冷门专家 bias 自动上调，均衡与主损失解耦。V3：671B 总参、激活约 37B。"
+    },
+    {
+      "h": "实现简化版 MoE 层",
+      "md": "教学版实现，重点是 router 的选择与加权：\n\n```python\nimport torch\nimport torch.nn.functional as F\n\nclass MoELayer(torch.nn.Module):\n    def __init__(self, d, d_ff, n_experts=8, top_k=2):\n        super().__init__()\n        self.router = torch.nn.Linear(d, n_experts)\n        self.experts = torch.nn.ModuleList(\n            [torch.nn.Sequential(\n                torch.nn.Linear(d, d_ff), torch.nn.GELU(),\n                torch.nn.Linear(d_ff, d)) for _ in range(n_experts)])\n        self.top_k = top_k\n\n    def forward(self, x):            # x: (B,L,d)\n        logits = self.router(x)        # (B,L,n_experts)\n        probs = F.softmax(logits, dim=-1)\n        topv, topi = probs.topk(self.top_k, dim=-1)\n        topv = topv / topv.sum(-1, keepdim=True)  # 加权归一\n        y = torch.zeros_like(x)\n        for e, expert in enumerate(self.experts):\n            mask = (topi == e)                 # 哪些 token 选了专家 e\n            if mask.any():\n                w = (topv * mask).sum(-1, keepdim=True)\n                y = y + w * expert(x)          # 稀疏激活：没被选不计算\n        return y, probs.mean((0, 1))           # 返回均值概率算 L_aux\n```\n\n训练循环用返回的 `probs.mean` 算 `Σ fᵢ·Pᵢ` 加进总损失。注意：循环写法每专家过一遍全量 x 再乘 mask 是教学取巧，工业实现用 grouped GEMM / all-to-all 才有真稀疏收益——**稀疏的收益在 kernel 与通信层兑现**。"
+    },
+    {
+      "h": "工程现实与串联",
+      "md": "MoE 的代价不在算法在系统：\n\n- **all-to-all 通信**：专家并行时 token 要「寄」给 owning GPU 上的专家再寄回，通信成新瓶颈\n- **训练不稳定**：router 离散选择让梯度抖动，α 难调（V3 的 bias 方案为此而生）\n- **小 batch 算不饱**：每个专家只有零星 token，GPU 利用率低——MoE 适合高并发服务\n\n选型口诀：**「激活参数」决定速度、「总参数」决定显存**——MoE 适合云端高并发；本地小内存设备要看总参数（671B 哪怕只激活 37B 也放不下）。\n\n明日预告：Week 18 复盘，整理 LLM 系统视角。"
+    }
+  ],
+  "keyPoints": [
+    "MoE 本质是条件计算：总参数量涨（吃 scaling law 红利），每 token 计算量几乎不变",
+    "三组件：router 打分 top-k、专家各自是 FFN、负载均衡辅助损失 L_aux = α·N·Σ fᵢ·Pᵢ",
+    "不加均衡损失会发生路由坍缩：早期被多选的专家强者愈强，其余饿死",
+    "DeepSeek 三要点：MLA 潜在 KV 压缩（架构层面省 KV cache）、细粒度+共享专家、V3 用 bias 调整实现无辅助损失的负载均衡",
+    "MoE 系统代价：all-to-all 通信、训练不稳定、小 batch 算不饱、总参数全驻显存",
+    "口诀：激活参数决定速度，总参数决定显存"
+  ],
+  "quiz": [
+    {
+      "q": "MoE 相比同计算量的 dense 模型的核心优势是？",
+      "options": [
+        "训练更稳定",
+        "总参数量可以大得多（知识容量大）而每 token 计算量几乎不变",
+        "不需要 GPU",
+        "推理延迟一定更低"
+      ],
+      "answer": 1,
+      "explain": "条件计算只激活 k 个专家：scaling law 吃参数红利，成本却按激活量而非总量计，这是「又大又便宜」的来源。"
+    },
+    {
+      "q": "负载均衡辅助损失不加会发生什么？",
+      "options": [
+        "显存溢出",
+        "路由坍缩：早期占优的专家被越选越多，其余专家训练不足",
+        "softmax 溢出",
+        "router 权重归零"
+      ],
+      "answer": 1,
+      "explain": "正反馈循环让强者愈强、弱者饿死，模型退化为只用少数专家的伪 dense，MoE 的容量优势消失。"
+    },
+    {
+      "q": "DeepSeek-V3 用 bias 调整路由实现负载均衡的巧妙之处是？",
+      "options": [
+        "bias 同时改变选择与输出加权，均衡更彻底",
+        "bias 只影响 top-k 选择（冷门专家 bias 自动上调），不污染输出加权，与主损失解耦",
+        "省掉 router",
+        "加速 all-to-all"
+      ],
+      "answer": 1,
+      "explain": "传统 L_aux 与主损失互相拉扯伤效果；bias 方案把「均衡」与「加权」分离，专家冷落了就加 bias 捞一把，输出仍用干净的路由分。"
+    },
+    {
+      "q": "共享专家在 DeepSeekMoE 中的作用是？",
+      "options": [
+        "备用专家",
+        "每个 token 必经，承载公共知识，让路由专家专注差异化分工",
+        "只处理长序列",
+        "负责 router 计算"
+      ],
+      "answer": 1,
+      "explain": "公共知识（语法、常识）不必重复学在每个路由专家里，隔离出一个必经的共享专家可去冗余、提升专家组合的表达效率。"
+    },
+    {
+      "q": "教学版 MoE 用循环 + mask 实现稀疏激活，为什么说它没有真稀疏收益？",
+      "options": [
+        "数学不对",
+        "每个专家仍对全量 x 计算后乘 mask，真收益需要 grouped GEMM / all-to-all 稀疏调度",
+        "softmax 用错了",
+        "top-k 太小"
+      ],
+      "answer": 1,
+      "explain": "掩码乘零不省计算，收益要靠 kernel/通信层只处理被选中的 token——与稀疏注意力「掩码是语义、kernel 是收益」同一条教训。"
+    },
+    {
+      "q": "「激活参数决定速度，总参数决定显存」意味着本地部署 671B/激活 37B 的模型时？",
+      "options": [
+        "只需 37B 的显存",
+        "速度按 37B 算，但全部 671B 参数都要驻显存，本地基本放不下（需量化/多卡）",
+        "速度和显存都按 37B",
+        "无法推理"
+      ],
+      "answer": 1,
+      "explain": "计算只碰激活的专家，但任何专家都可能在下个 token 被选中，所有专家参数必须随时可访问——速度便宜、显存昂贵。"
+    }
+  ]
+}

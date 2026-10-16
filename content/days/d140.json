@@ -1,0 +1,65 @@
+{
+  "day": 140,
+  "title": "Week 20 复盘 + RAG 项目整合",
+  "sections": [
+    {
+      "h": "复盘：从 Naive RAG 到 GraphRAG 的完整版图",
+      "md": "Phase 5 第一阶段收官。先回头看这六天搭起来的技术栈：\n\n| Day | 主题 | 一句话总结 |\n|---|---|---|\n| 134 | Naive RAG | 切块 → 检索 → 塞进 prompt 生成 |\n| 135 | BM25 + 稠密检索 | 稀疏抓关键词，稠密抓语义，混合最稳 |\n| 136 | 向量数据库 | Qdrant：HNSW 索引换来毫秒级近邻搜索 |\n| 137 | Rerank / HyDE | 粗排保召回，精排保精度 |\n| 138 | GraphRAG | 实体关系图补足跨文档推理 |\n| 139 | RAGAS 评估 | 无标注也能量化 faithfulness 与召回率 |\n\n> 自检：能对着一堵白墙画出你自己的 RAG 系统数据流吗？从原始文档到最终回答，每一个环节用了什么组件、参数是多少？画不出来就回去补。"
+    },
+    {
+      "h": "为什么要封装成服务",
+      "md": "命令行脚本是给自己用的，服务是给别人用的。把 RAG 流程封装成 **FastAPI** 服务后：\n\n- 前端/其他程序通过 HTTP 调用，与语言无关\n- 检索、生成、评估可以分开扩容（生成慢就多开 worker）\n- 有了统一入口才能加日志、限流、鉴权——这些是明天起 Agent 阶段的地基\n\n一个最小可用的目录结构：\n\n```text\nrag-service/\n├── main.py        # FastAPI 入口\n├── ingest.py      # 文档解析 + 切块 + 入库\n├── retriever.py   # 混合检索 + rerank\n├── generator.py   # prompt 组装 + LLM 调用\n└── eval.py        # RAGAS 定期回归\n```"
+    },
+    {
+      "h": "实现：三个核心端点",
+      "md": "**1. 入库**——POST `/ingest`：接收文档，切块后写入 Qdrant，返回入库块数。切块参数（chunk_size、overlap）写进配置而非硬编码。\n\n**2. 问答**——POST `/chat`：组装完整流水线。\n\n```python\n@app.post(\"/chat\")\nasync def chat(req: ChatRequest):\n    docs = retriever.search(req.query, top_k=8)\n    reranked = reranker.rerank(req.query, docs, top_k=4)\n    answer, refs = generator.answer(req.query, reranked)\n    return {\"answer\": answer, \"refs\": refs}\n```\n\n**3. 健康检查**——GET `/health`：返回向量库连通性、模型加载状态。没有它，部署平台上你的服务永远显示「不健康」。\n\n关键细节：LLM 调用是慢操作，`/chat` 一定要做成**异步**（`async def` + 异步 SDK），否则一个请求会阻塞整个 worker。"
+    },
+    {
+      "h": "写 blog：把工程实践讲清楚",
+      "md": "blog 不是流水账，是**决策记录**。推荐结构：\n\n1. **问题**：我拿什么语料、想回答什么问题\n2. **基线**：Naive RAG 的 RAGAS 分数和失败案例（引用比原文还离谱）\n3. **每个改进 + 数据**：加 rerank 后 faithfulness 从 0.71 → 0.86 这类具体数字——你 Day 139 已经测过，直接搬\n4. **翻车记录**：HyDE 在短查询上反而变差、GraphRAG 构图成本高到肉疼——诚实记录负结果最加分\n\n> 工程师读 blog 先看有没有数据。每个「我觉得更好了」都应换成「指标从 X 到 Y」。这与训练模型看 loss 曲线是同一个习惯：**没有度量就没有结论**。"
+    },
+    {
+      "h": "今日串联",
+      "md": "到今天你拥有了：一个可 HTTP 调用、带评估回归的 RAG 服务。但用户问「帮我订明天的会议室」时它只能翻文档——因为它是**被动应答**的，不会拆任务、不会调工具。\n\n明天开始进入 Agent：ReAct 让模型学会「想一步、做一步、看结果再想下一步」，你的 RAG 服务将成为 Agent 工具箱里的一件工具——被 function calling 调用。"
+    }
+  ],
+  "keyPoints": [
+    "封装成 FastAPI 服务的价值：解耦扩容、统一入口、可加鉴权限流",
+    "/chat 流水线：混合检索 → rerank → prompt 组装 → 异步生成，慢操作必须 async",
+    "blog 的核心是决策 + 数据：每句「更好了」都要有指标从 X 到 Y 的支撑",
+    "复盘标准：能不看资料画出自己 RAG 系统的完整数据流",
+    "RAG 服务下一步会被 Agent 通过 function calling 当作工具调用"
+  ],
+  "quiz": [
+    {
+      "q": "把 RAG 封装成 HTTP 服务，相比命令行脚本，最本质的收益是？",
+      "options": ["代码跑得更快", "服务可被任意程序组合调用，且各组件能独立扩容运维", "省去写检索代码", "LLM 输出质量更高"],
+      "answer": 1,
+      "explain": "服务化不改变算法本身，它带来的是接口标准化与运维能力（扩容、日志、鉴权），这是走向生产的前提。"
+    },
+    {
+      "q": "`/chat` 端点里 LLM 生成环节为什么必须异步？",
+      "options": ["异步能提高回答准确率", "避免一个慢请求阻塞整个 worker，拖垮并发吞吐", "FastAPI 强制要求", "为了省显存"],
+      "answer": 1,
+      "explain": "同步阻塞下，一个 10 秒的生成请求会让后续所有请求排队；异步让 worker 在等待 LLM 时处理别的请求。"
+    },
+    {
+      "q": "关于 /health 健康检查端点，最合理的实现是？",
+      "options": ["永远返回 ok", "检查向量库连通、关键模型是否已加载等依赖状态", "触发一次完整问答", "返回数据库里文档数量"],
+      "answer": 1,
+      "explain": "健康检查要反映真实可用性：依赖（Qdrant、模型）挂了就应该报不健康，让部署平台自动重启或摘除流量。"
+    },
+    {
+      "q": "写 RAG 工程 blog 时，哪种表述最有说服力？",
+      "options": ["「加了 rerank 后效果明显变好」", "「rerank 让 RAGAS faithfulness 从 0.71 提升到 0.86，但平均延迟增加 300ms」", "「业界都说 rerank 有用所以我加了」", "「用户体验大幅提升」"],
+      "answer": 1,
+      "explain": "指标 + 代价的表述可复现、可对比。只说「变好」无法验证；工程决策永远是收益与延迟/成本之间的权衡。"
+    },
+    {
+      "q": "Day 139 用 RAGAS 评出的指标里，faithfulness 衡量的是？",
+      "options": ["检索文档与问题的相关度", "回答是否忠实于检索到的文档（不编造）", "回答的流畅程度", "向量索引的召回速度"],
+      "answer": 1,
+      "explain": "faithfulness 对齐「答案能否被引用文档支撑」，它是 RAG 幻觉率的直接代理指标；answer relevance 才衡量对题程度。"
+    }
+  ]
+}

@@ -1,0 +1,2602 @@
+[
+  {
+    "day": 1,
+    "title": "信息论 + numpy 基础 + 概率入门",
+    "hours": 4.0,
+    "summary": "Phase 0 Week 1 启动。",
+    "subs": [
+      {
+        "name": "信息论：熵、KL 散度、互信息（3Blue1Brown *Information Theory*）",
+        "hours": "1.5h"
+      },
+      {
+        "name": "numpy 基础：数组、广播、矩阵乘法",
+        "hours": "1h"
+      },
+      {
+        "name": "概率基础：常见分布、贝叶斯（StatQuest *Statistics Fundamentals* 第 1–4 集）",
+        "hours": "1.5h"
+      }
+    ]
+  },
+  {
+    "day": 2,
+    "title": "信息论 + numpy 练习",
+    "hours": 4.0,
+    "summary": "巩固信息论 + 用 numpy 把公式落地。",
+    "subs": [
+      {
+        "name": "用 numpy 计算 KL 散度、熵、互信息",
+        "hours": "2h"
+      },
+      {
+        "name": "补 3Blue1Brown Information Theory 余下章节",
+        "hours": "1h"
+      },
+      {
+        "name": "写笔记：信息论在 ML 里到底用在哪（交叉熵 / KL 正则 / 互信息）",
+        "hours": "1h"
+      }
+    ]
+  },
+  {
+    "day": 3,
+    "title": "优化基础 + pandas 入门",
+    "hours": 4.0,
+    "summary": "为 Phase 1 梯度下降打基础。",
+    "subs": [
+      {
+        "name": "优化基础：SGD、Momentum、Adam 直觉（李宏毅《ML》第 1–2 讲）",
+        "hours": "2h"
+      },
+      {
+        "name": "pandas 基础：DataFrame、groupby、merge（Kaggle Learn）",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 4,
+    "title": "凸优化直觉 + softmax/cross-entropy 落地",
+    "hours": 4.0,
+    "summary": "数学周最重要的一天：用 numpy 实现 loss。",
+    "subs": [
+      {
+        "name": "凸优化直觉：凸集、凸函数、局部/全局最优（Boyd 凸优化 第 1 章）",
+        "hours": "1.5h"
+      },
+      {
+        "name": "用 numpy 实现 softmax + 矩阵乘法 + cross-entropy",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 5,
+    "title": "MLE 推导 + numpy MLP 前向",
+    "hours": 4.0,
+    "summary": "把概率 + 优化串起来。",
+    "subs": [
+      {
+        "name": "MLE 推导 + 信息论综合复习",
+        "hours": "2h"
+      },
+      {
+        "name": "写一个完整的 numpy MLP 前向 + 交叉熵损失",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 6,
+    "title": "拉格朗日乘子 + numpy vs PyTorch 梯度对比",
+    "hours": 4.0,
+    "summary": "Phase 0 收尾日。",
+    "subs": [
+      {
+        "name": "拉格朗日乘子直觉（SVM 章节，看 3Blue1Brown 即可）",
+        "hours": "1.5h"
+      },
+      {
+        "name": "用 PyTorch autograd 验证 numpy 手动梯度，误差 < 1e-6",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 7,
+    "title": "Phase 0 复盘 + blog 输出",
+    "hours": 4.0,
+    "summary": "把梯度这件事讲给别人听。",
+    "subs": [
+      {
+        "name": "写 blog：梯度是什么 / 链式法则矩阵版 / 反向传播直觉",
+        "hours": "3h"
+      },
+      {
+        "name": "用一张图解释 cross-entropy + softmax + MLE 的关系",
+        "hours": "1h"
+      }
+    ]
+  },
+  {
+    "day": 8,
+    "title": "监督学习 + 回归 (Andrew Ng Week 1)",
+    "hours": 4.0,
+    "summary": "Phase 1 Week 2 启动。",
+    "subs": [
+      {
+        "name": "吴恩达 MLS Week 1（监督学习 + 回归）",
+        "hours": "2h"
+      },
+      {
+        "name": "numpy 实现线性回归 + 最小二乘 + 解析梯度",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 9,
+    "title": "梯度下降 + 学习率 (Week 2)",
+    "hours": 4.0,
+    "summary": "Phase 1 核心机制第一天。",
+    "subs": [
+      {
+        "name": "吴恩达 MLS Week 2（梯度下降 + 学习率）",
+        "hours": "2h"
+      },
+      {
+        "name": "sklearn LinearRegression + 数值梯度对比",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 10,
+    "title": "分类 + 逻辑回归 (Week 3)",
+    "hours": 4.0,
+    "summary": "把 loss 从 MSE 切到 cross-entropy。",
+    "subs": [
+      {
+        "name": "吴恩达 MLS Week 3（分类 + 逻辑回归）",
+        "hours": "2h"
+      },
+      {
+        "name": "numpy 实现逻辑回归 + cross-entropy",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 11,
+    "title": "L1/L2 正则化 + 偏差-方差",
+    "hours": 4.0,
+    "summary": "Phase 2 反向传播的前置。",
+    "subs": [
+      {
+        "name": "L1/L2 正则化（理论 + sklearn 实验）",
+        "hours": "2h"
+      },
+      {
+        "name": "偏差-方差诊断（学习曲线绘制）",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 12,
+    "title": "决策树 + 随机森林",
+    "hours": 4.0,
+    "summary": "Kaggle Titanic 模型备选。",
+    "subs": [
+      {
+        "name": "决策树 + 随机森林（理论）",
+        "hours": "2h"
+      },
+      {
+        "name": "sklearn 训 Titanic，对比 LR / RF",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 13,
+    "title": "XGBoost + 评估指标",
+    "hours": 4.0,
+    "summary": "工业界表格数据 baseline。",
+    "subs": [
+      {
+        "name": "XGBoost / LightGBM（理论 + Titanic 调优）",
+        "hours": "2h"
+      },
+      {
+        "name": "评估指标：accuracy / precision / recall / F1 / ROC-AUC 手算",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 14,
+    "title": "完整 Titanic 项目",
+    "hours": 4.0,
+    "summary": "Phase 1 完整闭环。",
+    "subs": [
+      {
+        "name": "特征工程 + 模型对比 + README",
+        "hours": "3h"
+      },
+      {
+        "name": "写 blog：为什么最后选 XGBoost（不只是看分数）",
+        "hours": "1h"
+      }
+    ]
+  },
+  {
+    "day": 15,
+    "title": "交叉验证 + 网格搜索",
+    "hours": 4.0,
+    "summary": "调参基础。",
+    "subs": [
+      {
+        "name": "K 折交叉验证原理（StatQuest）",
+        "hours": "1h"
+      },
+      {
+        "name": "sklearn KFold + GridSearchCV 调 Titanic 模型",
+        "hours": "2h"
+      },
+      {
+        "name": "整理：当前 best CV score + 测试集分数",
+        "hours": "1h"
+      }
+    ]
+  },
+  {
+    "day": 16,
+    "title": "Bagging vs Boosting",
+    "hours": 4.0,
+    "summary": "理解集成学习的两种范式。",
+    "subs": [
+      {
+        "name": "Bagging 原理（方差降低）",
+        "hours": "1.5h"
+      },
+      {
+        "name": "Boosting 原理（偏差降低）",
+        "hours": "1.5h"
+      },
+      {
+        "name": "sklearn 实现 + Titanic 对比",
+        "hours": "1h"
+      }
+    ]
+  },
+  {
+    "day": 17,
+    "title": "PCA 降维 + t-SNE 可视化",
+    "hours": 4.0,
+    "summary": "为理解 embedding 打基础。",
+    "subs": [
+      {
+        "name": "PCA 推导（特征值分解视角）",
+        "hours": "2h"
+      },
+      {
+        "name": "sklearn PCA on MNIST + t-SNE 可视化",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 18,
+    "title": "SVM + 核方法",
+    "hours": 4.0,
+    "summary": "理解分类边界与核函数。",
+    "subs": [
+      {
+        "name": "SVM 几何直觉（3Blue1Brown）",
+        "hours": "1.5h"
+      },
+      {
+        "name": "sklearn SVM (linear / rbf) 实验",
+        "hours": "1.5h"
+      },
+      {
+        "name": "理解为什么 SVM 在低维高噪声数据上强",
+        "hours": "1h"
+      }
+    ]
+  },
+  {
+    "day": 19,
+    "title": "聚类 + K-means",
+    "hours": 4.0,
+    "summary": "无监督学习入门。",
+    "subs": [
+      {
+        "name": "K-means 推导（EM 视角）",
+        "hours": "2h"
+      },
+      {
+        "name": "sklearn KMeans on Iris / 客户分群 demo",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 20,
+    "title": "朴素贝叶斯 + 文本分类",
+    "hours": 4.0,
+    "summary": "传统 NLP baseline。",
+    "subs": [
+      {
+        "name": "朴素贝叶斯原理（条件独立性假设）",
+        "hours": "1.5h"
+      },
+      {
+        "name": "sklearn MultinomialNB on 20 Newsgroups",
+        "hours": "1.5h"
+      },
+      {
+        "name": "对比：NB vs LR 在文本分类上的表现",
+        "hours": "1h"
+      }
+    ]
+  },
+  {
+    "day": 21,
+    "title": "Week 3 复盘 + Kaggle 中期复盘",
+    "hours": 4.0,
+    "summary": "Phase 1 收尾前半。",
+    "subs": [
+      {
+        "name": "写 blog：偏差-方差 trade-off 实战经验",
+        "hours": "2h"
+      },
+      {
+        "name": "Kaggle Titanic 调优到 top 30% 公开榜",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 22,
+    "title": "特征工程深入",
+    "hours": 4.0,
+    "summary": "表格数据的天花板。",
+    "subs": [
+      {
+        "name": "类别特征：target encoding / one-hot / embedding",
+        "hours": "2h"
+      },
+      {
+        "name": "数值特征：分箱 / 对数变换 / 缺失值处理",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 23,
+    "title": "时间序列 + 简单推荐",
+    "hours": 4.0,
+    "summary": "工业界常见问题。",
+    "subs": [
+      {
+        "name": "时间序列：lag / rolling / seasonality",
+        "hours": "2h"
+      },
+      {
+        "name": "协同过滤简版（item-based CF）",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 24,
+    "title": "A/B 测试 + 线上评估",
+    "hours": 4.0,
+    "summary": "模型上线后的真相。",
+    "subs": [
+      {
+        "name": "A/B 测试原理（统计显著性 + 样本量）",
+        "hours": "2h"
+      },
+      {
+        "name": "写一个简化版 A/B 评估 notebook",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 25,
+    "title": "sklearn Pipeline + 自定义 Transformer",
+    "hours": 4.0,
+    "summary": "工程化基础。",
+    "subs": [
+      {
+        "name": "sklearn Pipeline 实战",
+        "hours": "1.5h"
+      },
+      {
+        "name": "写一个自定义 Transformer（特征选择 + 标准化）",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 26,
+    "title": "MLflow / DVC 入门",
+    "hours": 4.0,
+    "summary": "实验跟踪。",
+    "subs": [
+      {
+        "name": "MLflow 本地部署 + 记录 Titanic 实验",
+        "hours": "2h"
+      },
+      {
+        "name": "DVC 概念（data versioning）",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 27,
+    "title": "复盘 + 写一篇《我理解的 ML》",
+    "hours": 4.0,
+    "summary": "把 Phase 1 体系化输出。",
+    "subs": [
+      {
+        "name": "整理笔记：经典 ML 知识图谱",
+        "hours": "2h"
+      },
+      {
+        "name": "写 blog：梯度下降 → 正则化 → 集成 → 工业部署",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 28,
+    "title": "Phase 1 中期复盘 + 缓冲",
+    "hours": 4.0,
+    "summary": "查漏补缺。",
+    "subs": [
+      {
+        "name": "重做一遍 numpy 梯度对比 PyTorch（防生疏）",
+        "hours": "2h"
+      },
+      {
+        "name": "刷 Kaggle Titanic 公开榜前 30% 验证",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 29,
+    "title": "复习：所有 Phase 1 评估指标 + 选型决策",
+    "hours": 4.0,
+    "summary": "Phase 1 收尾前半。",
+    "subs": [
+      {
+        "name": "整理：什么时候用 LR / RF / XGBoost / NN",
+        "hours": "2h"
+      },
+      {
+        "name": "写决策树笔记",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 30,
+    "title": "复习：偏差-方差 + 集成 + 特征工程",
+    "hours": 4.0,
+    "summary": "巩固。",
+    "subs": [
+      {
+        "name": "重做 Titanic：换一种特征工程方案",
+        "hours": "2h"
+      },
+      {
+        "name": "对比新旧方案分数",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 31,
+    "title": "PyTorch 安装 + 第一个张量",
+    "hours": 4.0,
+    "summary": "Phase 2 启动日。",
+    "subs": [
+      {
+        "name": "PyTorch 安装（conda 虚拟环境）",
+        "hours": "1h"
+      },
+      {
+        "name": "Tensor 基础：创建 / reshape / broadcasting",
+        "hours": "1.5h"
+      },
+      {
+        "name": "torch.autograd.grad 手动求梯度",
+        "hours": "1.5h"
+      }
+    ]
+  },
+  {
+    "day": 32,
+    "title": "PyTorch nn.Module + 第一个 MLP",
+    "hours": 4.0,
+    "summary": "进入 PyTorch 范式。",
+    "subs": [
+      {
+        "name": "nn.Module / nn.Linear / nn.ReLU",
+        "hours": "2h"
+      },
+      {
+        "name": "训练循环：forward / loss / backward / step",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 33,
+    "title": "训练 on MNIST",
+    "hours": 4.0,
+    "summary": "DL 的 hello world。",
+    "subs": [
+      {
+        "name": "PyTorch 训 MLP on MNIST (≥ 97%)",
+        "hours": "3h"
+      },
+      {
+        "name": "wandb 接入记录 loss 曲线",
+        "hours": "1h"
+      }
+    ]
+  },
+  {
+    "day": 34,
+    "title": "Phase 1 收尾 + 准备 Phase 2",
+    "hours": 4.0,
+    "summary": "把 PyTorch 链上 numpy。",
+    "subs": [
+      {
+        "name": "对比 numpy 写的 MLP 和 PyTorch 写的 MLP（结果应一致）",
+        "hours": "2h"
+      },
+      {
+        "name": "写 blog：为什么我们需要 PyTorch",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 35,
+    "title": "Phase 1 完成 + 验收日",
+    "hours": 4.0,
+    "summary": "Kaggle Titanic top 30% 是硬指标。",
+    "subs": [
+      {
+        "name": "提交 Kaggle 公开榜截图（保存到 docs/）",
+        "hours": "2h"
+      },
+      {
+        "name": "写 phase 复盘 blog",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 36,
+    "title": "链式法则矩阵版（理论）",
+    "hours": 4.0,
+    "summary": "Phase 2 启动。",
+    "subs": [
+      {
+        "name": "链式法则 + Jacobian + 矩阵求导",
+        "hours": "2h"
+      },
+      {
+        "name": "手算 2 层 MLP 梯度（一个 toy example）",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 37,
+    "title": "numpy 手写反向传播（上）",
+    "hours": 4.0,
+    "summary": "纯 numpy 实现。",
+    "subs": [
+      {
+        "name": "定义 2 层 MLP class（无 torch）",
+        "hours": "2h"
+      },
+      {
+        "name": "手动实现 forward + backward",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 38,
+    "title": "numpy 手写反向传播（下）+ PyTorch 验证",
+    "hours": 4.0,
+    "summary": "把 numpy 实现和 PyTorch 对比。",
+    "subs": [
+      {
+        "name": "继续 numpy 实现：momentum 优化器",
+        "hours": "2h"
+      },
+      {
+        "name": "用 PyTorch 算相同梯度，误差 < 1e-6",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 39,
+    "title": "训练机制：SGD / Momentum / Adam",
+    "hours": 4.0,
+    "summary": "理解优化器演进。",
+    "subs": [
+      {
+        "name": "李宏毅《ML》优化器章节",
+        "hours": "1.5h"
+      },
+      {
+        "name": "手写 SGD / Momentum / Adam 优化器",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 40,
+    "title": "学习率调度 + 初始化",
+    "hours": 4.0,
+    "summary": "训练稳定性的两大支柱。",
+    "subs": [
+      {
+        "name": "学习率：warmup / cosine / step decay",
+        "hours": "1.5h"
+      },
+      {
+        "name": "初始化：zero / random / Xavier / Kaiming",
+        "hours": "1.5h"
+      },
+      {
+        "name": "实验：MLP on MNIST 对比不同 LR schedule",
+        "hours": "1h"
+      }
+    ]
+  },
+  {
+    "day": 41,
+    "title": "激活函数 + 损失函数深入",
+    "hours": 4.0,
+    "summary": "把 ReLU/Sigmoid/Tanh/Softmax 串起来。",
+    "subs": [
+      {
+        "name": "激活函数对比 + 梯度特性",
+        "hours": "1.5h"
+      },
+      {
+        "name": "Loss: MSE / CrossEntropy / Focal / Label Smoothing",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 42,
+    "title": "Week 6 复盘 + 写一篇反向传播 blog",
+    "hours": 4.0,
+    "summary": "把第一周知识体系化。",
+    "subs": [
+      {
+        "name": "画一张反向传播计算图（手画）",
+        "hours": "2h"
+      },
+      {
+        "name": "写 blog：从 numpy 到 PyTorch 的 7 天",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 43,
+    "title": "数据加载 + DataLoader",
+    "hours": 4.0,
+    "summary": "PyTorch 工程化第一步。",
+    "subs": [
+      {
+        "name": "Dataset / DataLoader 原理",
+        "hours": "1.5h"
+      },
+      {
+        "name": "写一个自定义 Dataset（CIFAR-10）",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 44,
+    "title": "混合精度训练 (AMP)",
+    "hours": 4.0,
+    "summary": "工业界标配。",
+    "subs": [
+      {
+        "name": "FP16 / BF16 / FP32 数值范围",
+        "hours": "1.5h"
+      },
+      {
+        "name": "torch.cuda.amp 实战 CIFAR-10",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 45,
+    "title": "权重衰减 + Dropout",
+    "hours": 4.0,
+    "summary": "正则化。",
+    "subs": [
+      {
+        "name": "L2 权重衰减 = AdamW vs Adam",
+        "hours": "1.5h"
+      },
+      {
+        "name": "Dropout 实现 + 训练 / 推理区分",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 46,
+    "title": "BatchNorm / LayerNorm / GroupNorm",
+    "hours": 4.0,
+    "summary": "归一化方法。",
+    "subs": [
+      {
+        "name": "BN / LN / GN 适用场景",
+        "hours": "1.5h"
+      },
+      {
+        "name": "PyTorch 实现 + CIFAR-10 对比",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 47,
+    "title": "学习率 + 优化器搜索",
+    "hours": 4.0,
+    "summary": "调参基础。",
+    "subs": [
+      {
+        "name": "LR finder 原理 + 实现",
+        "hours": "1.5h"
+      },
+      {
+        "name": "CIFAR-10 找 best LR",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 48,
+    "title": "权重初始化深入",
+    "hours": 4.0,
+    "summary": "Xavier / Kaiming 数学原理。",
+    "subs": [
+      {
+        "name": "Xavier 推导（方差守恒）",
+        "hours": "2h"
+      },
+      {
+        "name": "Kaiming 推导（ReLU 修正）",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 49,
+    "title": "Week 7 复盘 + 训练监控",
+    "hours": 4.0,
+    "summary": "把训练变成可观测系统。",
+    "subs": [
+      {
+        "name": "wandb / tensorboard 完整接入",
+        "hours": "2h"
+      },
+      {
+        "name": "写一个训练监控：loss / grad / weight histogram",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 50,
+    "title": "CNN 基础：卷积 + 池化",
+    "hours": 4.0,
+    "summary": "视觉的起点。",
+    "subs": [
+      {
+        "name": "卷积运算直觉（3Blue1Brown）",
+        "hours": "1.5h"
+      },
+      {
+        "name": "手动算一个 3x3 卷积",
+        "hours": "1h"
+      },
+      {
+        "name": "PyTorch nn.Conv2d 实战",
+        "hours": "1.5h"
+      }
+    ]
+  },
+  {
+    "day": 51,
+    "title": "CNN 经典架构演进",
+    "hours": 4.0,
+    "summary": "LeNet → AlexNet → VGG。",
+    "subs": [
+      {
+        "name": "LeNet5 / AlexNet / VGG16 结构对比",
+        "hours": "2h"
+      },
+      {
+        "name": "PyTorch 实现 AlexNet on CIFAR-10",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 52,
+    "title": "ResNet 残差连接",
+    "hours": 4.0,
+    "summary": "深度网络的奠基。",
+    "subs": [
+      {
+        "name": "ResNet 残差原理（梯度通畅性）",
+        "hours": "1.5h"
+      },
+      {
+        "name": "PyTorch 实现 ResNet-20 on CIFAR-10",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 53,
+    "title": "数据增强",
+    "hours": 4.0,
+    "summary": "把 augmentation 玩出花。",
+    "subs": [
+      {
+        "name": "基础增强：flip / crop / color jitter",
+        "hours": "1.5h"
+      },
+      {
+        "name": "高级：CutOut / MixUp / CutMix / RandAugment",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 54,
+    "title": "ResNet 训练到 ≥ 88%",
+    "hours": 4.0,
+    "summary": "Phase 2 核心里程碑。",
+    "subs": [
+      {
+        "name": "调 LR / aug / model 跑通 88% 准确率",
+        "hours": "3h"
+      },
+      {
+        "name": "wandb 记录完整实验",
+        "hours": "1h"
+      }
+    ]
+  },
+  {
+    "day": 55,
+    "title": "可视化：CAM / Grad-CAM",
+    "hours": 4.0,
+    "summary": "模型可解释性入门。",
+    "subs": [
+      {
+        "name": "CAM 原理",
+        "hours": "1.5h"
+      },
+      {
+        "name": "PyTorch 实现 Grad-CAM on ResNet",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 56,
+    "title": "Week 8 复盘 + 整理训练框架",
+    "hours": 4.0,
+    "summary": "把 CNN 流程封装成模板。",
+    "subs": [
+      {
+        "name": "写一个通用训练模板（model / data / train / eval）",
+        "hours": "3h"
+      },
+      {
+        "name": "写 blog：CNN 的 7 天",
+        "hours": "1h"
+      }
+    ]
+  },
+  {
+    "day": 57,
+    "title": "RNN 原理",
+    "hours": 4.0,
+    "summary": "序列建模起点。",
+    "subs": [
+      {
+        "name": "RNN 前向 + 反向（BPTT）",
+        "hours": "2h"
+      },
+      {
+        "name": "PyTorch nn.RNN 字符级语言模型 demo",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 58,
+    "title": "LSTM / GRU",
+    "hours": 4.0,
+    "summary": "长序列建模。",
+    "subs": [
+      {
+        "name": "LSTM 三门控推导",
+        "hours": "1.5h"
+      },
+      {
+        "name": "PyTorch LSTM 字符级语言模型",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 59,
+    "title": "Seq2Seq + 机器翻译",
+    "hours": 4.0,
+    "summary": "Encoder-Decoder 范式。",
+    "subs": [
+      {
+        "name": "Seq2Seq 架构 + Teacher Forcing",
+        "hours": "2h"
+      },
+      {
+        "name": "PyTorch 实现英德翻译 toy demo",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 60,
+    "title": "注意力机制（Bengio 2014 / Bahdanau 2015）",
+    "hours": 4.0,
+    "summary": "Attention 起源。",
+    "subs": [
+      {
+        "name": "Bahdanau Attention 论文精读",
+        "hours": "2h"
+      },
+      {
+        "name": "PyTorch 加 attention 到翻译 demo",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 61,
+    "title": "Self-Attention + 缩放点积",
+    "hours": 4.0,
+    "summary": "Transformer 的种子。",
+    "subs": [
+      {
+        "name": "Scaled Dot-Product Attention 公式",
+        "hours": "1.5h"
+      },
+      {
+        "name": "PyTorch 实现 Multi-Head Self-Attention",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 62,
+    "title": "Cross-Attention + Causal Mask",
+    "hours": 4.0,
+    "summary": "为 Transformer 铺路。",
+    "subs": [
+      {
+        "name": "Cross-Attention 几何直觉",
+        "hours": "1.5h"
+      },
+      {
+        "name": "实现 masked self-attention（GPT 风格）",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 63,
+    "title": "Week 9 复盘 + 写一篇 RNN-to-Attention blog",
+    "hours": 4.0,
+    "summary": "把序列建模历史串起来。",
+    "subs": [
+      {
+        "name": "画一张时间线图（RNN → LSTM → Attention）",
+        "hours": "2h"
+      },
+      {
+        "name": "写 blog：从 RNN 到 Attention 的 7 天",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 64,
+    "title": "整合项目：图像分类 end-to-end",
+    "hours": 4.0,
+    "summary": "Phase 2 收尾整合。",
+    "subs": [
+      {
+        "name": "用通用模板训 ResNet-50 on CIFAR-100",
+        "hours": "3h"
+      },
+      {
+        "name": "wandb 完整记录 + checkpoint 管理",
+        "hours": "1h"
+      }
+    ]
+  },
+  {
+    "day": 65,
+    "title": "分布式训练入门 (DDP)",
+    "hours": 4.0,
+    "summary": "单机多卡。",
+    "subs": [
+      {
+        "name": "DDP 原理（数据并行 + AllReduce）",
+        "hours": "1.5h"
+      },
+      {
+        "name": "PyTorch DDP on CIFAR-10 (2 GPUs)",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 66,
+    "title": "模型部署入门 (TorchScript / ONNX)",
+    "hours": 4.0,
+    "summary": "把模型打包。",
+    "subs": [
+      {
+        "name": "TorchScript trace / script",
+        "hours": "1.5h"
+      },
+      {
+        "name": "ONNX 导出 + ONNX Runtime 推理",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 67,
+    "title": "PyTorch Profiler + 性能调优",
+    "hours": 4.0,
+    "summary": "训练加速。",
+    "subs": [
+      {
+        "name": "torch.profiler 抓热点",
+        "hours": "1.5h"
+      },
+      {
+        "name": "数据加载瓶颈分析 + num_workers 调优",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 68,
+    "title": "手写 mini-Transformer（前向）",
+    "hours": 4.0,
+    "summary": "Phase 3 预热。",
+    "subs": [
+      {
+        "name": "用 PyTorch 写 6 层 encoder-only Transformer",
+        "hours": "3h"
+      },
+      {
+        "name": "在小文本分类任务上跑通",
+        "hours": "1h"
+      }
+    ]
+  },
+  {
+    "day": 69,
+    "title": "Phase 2 收尾 + 写复盘 blog",
+    "hours": 4.0,
+    "summary": "把 Phase 2 体系化。",
+    "subs": [
+      {
+        "name": "整理：训练一个现代模型的所有 checklist",
+        "hours": "2h"
+      },
+      {
+        "name": "写 blog：深度学习 5 周学到了什么",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 70,
+    "title": "Phase 2 完成 + 验收日",
+    "hours": 4.0,
+    "summary": "ResNet-20 ≥ 88% + mini-Transformer 跑通。",
+    "subs": [
+      {
+        "name": "验收清单：跑一次完整训练，记录结果",
+        "hours": "2h"
+      },
+      {
+        "name": "提交验收 blog",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 71,
+    "title": "Attention 公式推导（Q/K/V 视角）",
+    "hours": 4.0,
+    "summary": "Phase 3 启动。",
+    "subs": [
+      {
+        "name": "Q/K/V 几何意义（信息检索视角）",
+        "hours": "2h"
+      },
+      {
+        "name": "手算一个 3x3 attention matrix",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 72,
+    "title": "Multi-Head 动机 + 实现",
+    "hours": 4.0,
+    "summary": "多头为什么有效。",
+    "subs": [
+      {
+        "name": "Multi-Head 数学原理（子空间投影）",
+        "hours": "2h"
+      },
+      {
+        "name": "PyTorch 实现 8-head attention",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 73,
+    "title": "FlashAttention 原理",
+    "hours": 4.0,
+    "summary": "工程化 attention。",
+    "subs": [
+      {
+        "name": "FlashAttention 论文精读",
+        "hours": "2h"
+      },
+      {
+        "name": "用 flash-attn 库对比标准 attention 速度",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 74,
+    "title": "位置编码：Sinusoidal + Learned",
+    "hours": 4.0,
+    "summary": "序列顺序的表达。",
+    "subs": [
+      {
+        "name": "Sinusoidal 公式推导",
+        "hours": "1.5h"
+      },
+      {
+        "name": "PyTorch 实现 Sinusoidal + Learned PE",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 75,
+    "title": "RoPE 数学原理",
+    "hours": 4.0,
+    "summary": "现代 LLM 标配。",
+    "subs": [
+      {
+        "name": "RoPE 论文精读",
+        "hours": "2h"
+      },
+      {
+        "name": "PyTorch 实现 RoPE",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 76,
+    "title": "ALiBi / YaRN / 长度外推",
+    "hours": 4.0,
+    "summary": "长上下文技术。",
+    "subs": [
+      {
+        "name": "ALiBi / YaRN 原理对比",
+        "hours": "2h"
+      },
+      {
+        "name": "实验：不同 PE 在长序列上的表现",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 77,
+    "title": "Week 11 复盘 + 写一篇 Attention blog",
+    "hours": 4.0,
+    "summary": "把 attention 体系化。",
+    "subs": [
+      {
+        "name": "画一张 Attention 演进时间线",
+        "hours": "2h"
+      },
+      {
+        "name": "写 blog：Attention is All You Need 7 年回顾",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 78,
+    "title": "Transformer Block 完整结构",
+    "hours": 4.0,
+    "summary": "把零件装起来。",
+    "subs": [
+      {
+        "name": "Pre-norm vs Post-norm 对比",
+        "hours": "1.5h"
+      },
+      {
+        "name": "PyTorch 实现完整 Block（含残差 + LN）",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 79,
+    "title": "FFN 深入（GELU / SwiGLU / MoE）",
+    "hours": 4.0,
+    "summary": "FFN 是参数的 2/3。",
+    "subs": [
+      {
+        "name": "GELU / SwiGLU 推导",
+        "hours": "1.5h"
+      },
+      {
+        "name": "PyTorch 实现 SwiGLU + 简化版 MoE",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 80,
+    "title": "RMSNorm vs LayerNorm",
+    "hours": 4.0,
+    "summary": "LLaMA 系列的标配。",
+    "subs": [
+      {
+        "name": "RMSNorm 数学推导",
+        "hours": "1.5h"
+      },
+      {
+        "name": "PyTorch 实现 RMSNorm",
+        "hours": "1.5h"
+      },
+      {
+        "name": "对比 LayerNorm 在小模型上的速度",
+        "hours": "1h"
+      }
+    ]
+  },
+  {
+    "day": 81,
+    "title": "Tokenizer：Byte-Level BPE",
+    "hours": 4.0,
+    "summary": "理解 LLM 第一步。",
+    "subs": [
+      {
+        "name": "BPE 算法（minbpe 仓库）",
+        "hours": "2h"
+      },
+      {
+        "name": "动手训练一个 BPE on 中文语料",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 82,
+    "title": "手写 BPE Tokenizer",
+    "hours": 4.0,
+    "summary": "不调包实现。",
+    "subs": [
+      {
+        "name": "从零写 BPE：merge 规则 + encode/decode",
+        "hours": "3h"
+      },
+      {
+        "name": "对比 tiktoken 验证正确性",
+        "hours": "1h"
+      }
+    ]
+  },
+  {
+    "day": 83,
+    "title": "三大架构对比：Encoder/Decoder/Enc-Dec",
+    "hours": 4.0,
+    "summary": "BERT vs GPT vs T5。",
+    "subs": [
+      {
+        "name": "读 BERT / GPT-2 / T5 论文（各 1h）",
+        "hours": "3h"
+      },
+      {
+        "name": "画一张架构对比图",
+        "hours": "1h"
+      }
+    ]
+  },
+  {
+    "day": 84,
+    "title": "Week 12 复盘 + 整理 nanoGPT 框架",
+    "hours": 4.0,
+    "summary": "开始组装 mini-GPT。",
+    "subs": [
+      {
+        "name": "克隆 Karpathy nanoGPT repo + 跑通",
+        "hours": "2h"
+      },
+      {
+        "name": "手画一张 GPT-2 block 完整结构图",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 85,
+    "title": "数据流水线：清洗 + 去重 + 质量过滤",
+    "hours": 4.0,
+    "summary": "模型的天花板在数据。",
+    "subs": [
+      {
+        "name": "读 SlimPajama / RedPajama 数据准备论文",
+        "hours": "1.5h"
+      },
+      {
+        "name": "用 datasets 库清洗一个 1GB 文本",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 86,
+    "title": "DataLoader 优化（packaging / num_workers）",
+    "hours": 4.0,
+    "summary": "训练效率。",
+    "subs": [
+      {
+        "name": "实现 sample-packing（多文档打包）",
+        "hours": "2h"
+      },
+      {
+        "name": "PyTorch DataLoader 调优：prefetch / pin_memory",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 87,
+    "title": "训练：AMP + 梯度累积 + ZeRO-1",
+    "hours": 4.0,
+    "summary": "大模型训练基础。",
+    "subs": [
+      {
+        "name": "AMP / 梯度累积 / DeepSpeed ZeRO-1 原理",
+        "hours": "1.5h"
+      },
+      {
+        "name": "用 DeepSpeed 跑 mini-GPT",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 88,
+    "title": "Loss 监控 + 异常诊断",
+    "hours": 4.0,
+    "summary": "训练出问题的标准动作。",
+    "subs": [
+      {
+        "name": "Loss spike 诊断清单",
+        "hours": "1.5h"
+      },
+      {
+        "name": "故意训坏一个模型然后救回来",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 89,
+    "title": "Checkpoint + Resume + EMA",
+    "hours": 4.0,
+    "summary": "工程化。",
+    "subs": [
+      {
+        "name": "写一个完善的 checkpoint 逻辑",
+        "hours": "2h"
+      },
+      {
+        "name": "EMA 实现 + 在 mini-GPT 上跑",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 90,
+    "title": "学习率 + Warmup + Cosine",
+    "hours": 4.0,
+    "summary": "训练稳定性。",
+    "subs": [
+      {
+        "name": "实现 linear warmup + cosine decay",
+        "hours": "1.5h"
+      },
+      {
+        "name": "对比有无 warmup 的训练曲线",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 91,
+    "title": "Week 13 复盘 + mini-GPT 跑通",
+    "hours": 4.0,
+    "summary": "开始看到 loss 下降。",
+    "subs": [
+      {
+        "name": "在 TinyStories 上跑 mini-GPT 50M 半天",
+        "hours": "3h"
+      },
+      {
+        "name": "整理训练日志 + 截图",
+        "hours": "1h"
+      }
+    ]
+  },
+  {
+    "day": 92,
+    "title": "mini-GPT 训练调优到 loss 平稳",
+    "hours": 4.0,
+    "summary": "Phase 3 核心。",
+    "subs": [
+      {
+        "name": "调 LR / batch / arch 直到 loss 平稳下降",
+        "hours": "3h"
+      },
+      {
+        "name": "记录 best config",
+        "hours": "1h"
+      }
+    ]
+  },
+  {
+    "day": 93,
+    "title": "生成质量评估（perplexity + 人工）",
+    "hours": 4.0,
+    "summary": "模型做出来的标准。",
+    "subs": [
+      {
+        "name": "写 perplexity 评估脚本",
+        "hours": "2h"
+      },
+      {
+        "name": "人工评估 50 个生成样本",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 94,
+    "title": "Scaling Law 入门（Chinchilla）",
+    "hours": 4.0,
+    "summary": "理解模型/数据最优配比。",
+    "subs": [
+      {
+        "name": "Chinchilla 论文精读",
+        "hours": "2h"
+      },
+      {
+        "name": "写一个 toy scaling law 实验",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 95,
+    "title": "GPT-2 论文精读 + 复现",
+    "hours": 4.0,
+    "summary": "把 1.5B 缩小到能跑。",
+    "subs": [
+      {
+        "name": "GPT-2 论文精读",
+        "hours": "2h"
+      },
+      {
+        "name": "用 nanoGPT 配置跑 GPT-2 124M 缩小版",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 96,
+    "title": "Phase 3 收尾 + mini-GPT 完整训练",
+    "hours": 4.0,
+    "summary": "跑完一个完整预训练。",
+    "subs": [
+      {
+        "name": "mini-GPT 50M 全量训练 1 epoch",
+        "hours": "3h"
+      },
+      {
+        "name": "记录训练曲线 + 生成样本",
+        "hours": "1h"
+      }
+    ]
+  },
+  {
+    "day": 97,
+    "title": "Phase 3 复盘 + 写博客",
+    "hours": 4.0,
+    "summary": "Phase 3 体系化。",
+    "subs": [
+      {
+        "name": "写 blog：Transformer + 预训练的 4 周",
+        "hours": "2h"
+      },
+      {
+        "name": "整理：nanoGPT 的每一行代码都讲一遍",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 98,
+    "title": "Phase 3 完成 + 验收日",
+    "hours": 4.0,
+    "summary": "mini-GPT 生成连贯 + 手写 BPE。",
+    "subs": [
+      {
+        "name": "验收：生成 50 个样本人工评分",
+        "hours": "2h"
+      },
+      {
+        "name": "提交 blog + 代码 repo",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 99,
+    "title": "LLaMA 2 论文精读",
+    "hours": 4.0,
+    "summary": "Phase 4 启动。",
+    "subs": [
+      {
+        "name": "LLaMA 2 论文读 1/2",
+        "hours": "2h"
+      },
+      {
+        "name": "LLaMA 2 论文读 2/2 + 笔记",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 100,
+    "title": "LLaMA 架构：RMSNorm + RoPE + SwiGLU + GQA",
+    "hours": 4.0,
+    "summary": "所有现代 LLM 标配。",
+    "subs": [
+      {
+        "name": "逐组件实现 LLaMA Block",
+        "hours": "3h"
+      },
+      {
+        "name": "测试 forward 正确性",
+        "hours": "1h"
+      }
+    ]
+  },
+  {
+    "day": 101,
+    "title": "GQA（Grouped Query Attention）深入",
+    "hours": 4.0,
+    "summary": "推理加速核心。",
+    "subs": [
+      {
+        "name": "GQA 论文 + MHA / MQA / GQA 对比",
+        "hours": "1.5h"
+      },
+      {
+        "name": "实现 GQA on top of MHA",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 102,
+    "title": "mini-LLaMA 130M 完整实现",
+    "hours": 4.0,
+    "summary": "Phase 4 核心里程碑。",
+    "subs": [
+      {
+        "name": "写完整 mini-LLaMA 130M（含 tokenizer）",
+        "hours": "3h"
+      },
+      {
+        "name": "单步 forward + 简单反向",
+        "hours": "1h"
+      }
+    ]
+  },
+  {
+    "day": 103,
+    "title": "mini-LLaMA 预训练启动",
+    "hours": 4.0,
+    "summary": "开始训。",
+    "subs": [
+      {
+        "name": "准备数据 + 配置",
+        "hours": "2h"
+      },
+      {
+        "name": "启动训练（后台）",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 104,
+    "title": "监控训练 + 调优",
+    "hours": 4.0,
+    "summary": "Loss 监控 + 异常处理。",
+    "subs": [
+      {
+        "name": "wandb 完整接入",
+        "hours": "1.5h"
+      },
+      {
+        "name": "调 LR / batch 直到 loss 下降",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 105,
+    "title": "Week 15 复盘 + mini-LLaMA 训完",
+    "hours": 4.0,
+    "summary": "第一个自己的 LLM。",
+    "subs": [
+      {
+        "name": "继续训练 + 调优",
+        "hours": "3h"
+      },
+      {
+        "name": "生成样本 + 评估",
+        "hours": "1h"
+      }
+    ]
+  },
+  {
+    "day": 106,
+    "title": "SFT 数据准备",
+    "hours": 4.0,
+    "summary": "对齐第一步。",
+    "subs": [
+      {
+        "name": "Alpaca / Dolly / OpenAssistant 数据格式",
+        "hours": "1.5h"
+      },
+      {
+        "name": "清洗 + 格式化 5K 中文 SFT 数据",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 107,
+    "title": "用 TRL 做 SFT",
+    "hours": 4.0,
+    "summary": "工业标准流程。",
+    "subs": [
+      {
+        "name": "TRL SFTTrainer 原理",
+        "hours": "1.5h"
+      },
+      {
+        "name": "对 mini-LLaMA 做 SFT",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 108,
+    "title": "DPO 原理",
+    "hours": 4.0,
+    "summary": "绕过 RLHF 的现代方案。",
+    "subs": [
+      {
+        "name": "DPO 论文精读",
+        "hours": "2h"
+      },
+      {
+        "name": "理解为什么 DPO 等价于 RLHF",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 109,
+    "title": "DPO 数据准备",
+    "hours": 4.0,
+    "summary": "需要 chosen/rejected pairs。",
+    "subs": [
+      {
+        "name": "UltraFeedback / HH-RLHF 数据格式",
+        "hours": "1.5h"
+      },
+      {
+        "name": "清洗 + 格式化 5K DPO 数据",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 110,
+    "title": "用 TRL 做 DPO",
+    "hours": 4.0,
+    "summary": "端到端对齐。",
+    "subs": [
+      {
+        "name": "TRL DPOTrainer 配置",
+        "hours": "1.5h"
+      },
+      {
+        "name": "对 SFT 模型做 DPO",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 111,
+    "title": "对齐效果评估",
+    "hours": 4.0,
+    "summary": "怎么判断对齐有效。",
+    "subs": [
+      {
+        "name": "AlpacaEval / MT-Bench 介绍",
+        "hours": "1.5h"
+      },
+      {
+        "name": "人工评估 50 个样本",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 112,
+    "title": "Week 16 复盘 + 整理 SFT+DPO pipeline",
+    "hours": 4.0,
+    "summary": "形成可复用流程。",
+    "subs": [
+      {
+        "name": "把 SFT + DPO 流程封装成脚本",
+        "hours": "3h"
+      },
+      {
+        "name": "写 blog：LLM 对齐的两种路径",
+        "hours": "1h"
+      }
+    ]
+  },
+  {
+    "day": 113,
+    "title": "KV cache 原理",
+    "hours": 4.0,
+    "summary": "推理加速基础。",
+    "subs": [
+      {
+        "name": "KV cache 数学 + 显存计算",
+        "hours": "2h"
+      },
+      {
+        "name": "手写带 KV cache 的推理",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 114,
+    "title": "PagedAttention (vLLM) 原理",
+    "hours": 4.0,
+    "summary": "你目标里“vLLM 为什么这样设计”的核心。",
+    "subs": [
+      {
+        "name": "vLLM 论文精读",
+        "hours": "2h"
+      },
+      {
+        "name": "理解 virtual memory + page table 类比",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 115,
+    "title": "vLLM 部署 mini-LLaMA",
+    "hours": 4.0,
+    "summary": "端到端部署。",
+    "subs": [
+      {
+        "name": "vLLM 启动 server",
+        "hours": "1.5h"
+      },
+      {
+        "name": "benchmark: 吞吐量 + 首 token 延迟",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 116,
+    "title": "Continuous Batching",
+    "hours": 4.0,
+    "summary": "vLLM 性能来源。",
+    "subs": [
+      {
+        "name": "Continuous Batching 原理",
+        "hours": "1.5h"
+      },
+      {
+        "name": "对比 static vs continuous 吞吐量",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 117,
+    "title": "Speculative Decoding",
+    "hours": 4.0,
+    "summary": "进一步加速。",
+    "subs": [
+      {
+        "name": "Speculative Decoding 论文精读",
+        "hours": "2h"
+      },
+      {
+        "name": "用 draft model 加速推理",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 118,
+    "title": "TensorRT-LLM / llama.cpp 入门",
+    "hours": 4.0,
+    "summary": "工业级推理方案。",
+    "subs": [
+      {
+        "name": "TensorRT-LLM 部署 demo",
+        "hours": "2h"
+      },
+      {
+        "name": "llama.cpp 量化部署",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 119,
+    "title": "Week 17 复盘 + 写推理优化 blog",
+    "hours": 4.0,
+    "summary": "把推理系统化。",
+    "subs": [
+      {
+        "name": "画一张推理优化技术栈图",
+        "hours": "2h"
+      },
+      {
+        "name": "写 blog：从 KV cache 到 vLLM 的 7 天",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 120,
+    "title": "FlashAttention 1/2 深入",
+    "hours": 4.0,
+    "summary": "训练加速核心。",
+    "subs": [
+      {
+        "name": "FlashAttention 2 论文精读",
+        "hours": "2h"
+      },
+      {
+        "name": "手算 tiling + online softmax",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 121,
+    "title": "FlashAttention 3 / 4 概览",
+    "hours": 4.0,
+    "summary": "SOTA 跟进。",
+    "subs": [
+      {
+        "name": "FlashAttention 3 + 4 论文摘要阅读",
+        "hours": "2h"
+      },
+      {
+        "name": "对比 FA1/2/3/4 速度与显存",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 122,
+    "title": "长上下文技术 (RoPE scaling / NTK-aware)",
+    "hours": 4.0,
+    "summary": "100K+ 上下文。",
+    "subs": [
+      {
+        "name": "RoPE scaling 论文精读",
+        "hours": "2h"
+      },
+      {
+        "name": "实现 NTK-aware scaling",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 123,
+    "title": "Sparse Attention (BigBird / Longformer)",
+    "hours": 4.0,
+    "summary": "长序列的另一条路。",
+    "subs": [
+      {
+        "name": "BigBird / Longformer 论文精读",
+        "hours": "2h"
+      },
+      {
+        "name": "PyTorch 实现 Longformer global attention",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 124,
+    "title": "Mamba / SSM 入门",
+    "hours": 4.0,
+    "summary": "Transformer 之外的选择。",
+    "subs": [
+      {
+        "name": "Mamba 论文精读",
+        "hours": "2h"
+      },
+      {
+        "name": "PyTorch 实现简化版 SSM",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 125,
+    "title": "MoE (Mixture of Experts) 入门",
+    "hours": 4.0,
+    "summary": "DeepSeek-V2/V3 核心。",
+    "subs": [
+      {
+        "name": "MoE 原理 + DeepSeek-V2 论文精读",
+        "hours": "2h"
+      },
+      {
+        "name": "实现简化版 MoE 层",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 126,
+    "title": "Week 18 复盘 + 整理 LLM 系统视角",
+    "hours": 4.0,
+    "summary": "把训练+推理串起来。",
+    "subs": [
+      {
+        "name": "画一张 LLM 全栈图（数据/训练/对齐/推理/部署）",
+        "hours": "2h"
+      },
+      {
+        "name": "写 blog：现代 LLM 系统视角",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 127,
+    "title": "量化基础：INT8 / INT4 / GPTQ / AWQ",
+    "hours": 4.0,
+    "summary": "端侧部署的钥匙。",
+    "subs": [
+      {
+        "name": "PTQ vs QAT 概念",
+        "hours": "1.5h"
+      },
+      {
+        "name": "GPTQ / AWQ 论文精读",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 128,
+    "title": "GGUF 格式 + llama.cpp",
+    "hours": 4.0,
+    "summary": "本地跑 LLM 的工业方案。",
+    "subs": [
+      {
+        "name": "GGUF 格式解析",
+        "hours": "1.5h"
+      },
+      {
+        "name": "llama.cpp 量化部署自己的模型",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 129,
+    "title": "模型评估：MMLU / GSM8K / HumanEval",
+    "hours": 4.0,
+    "summary": "模型能力的真相。",
+    "subs": [
+      {
+        "name": "lm-evaluation-harness 使用",
+        "hours": "2h"
+      },
+      {
+        "name": "评估自己的 mini-LLaMA",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 130,
+    "title": "安全 + Jailbreak 入门",
+    "hours": 4.0,
+    "summary": "生产环境必修。",
+    "subs": [
+      {
+        "name": "Jailbreak 攻击类型",
+        "hours": "1.5h"
+      },
+      {
+        "name": "简单的 safety filter 实现",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 131,
+    "title": "Agent 框架概览 (LangChain / LangGraph / AutoGen)",
+    "hours": 4.0,
+    "summary": "为 Phase 5 铺路。",
+    "subs": [
+      {
+        "name": "三大框架对比",
+        "hours": "2h"
+      },
+      {
+        "name": "跑通每个框架的 hello world",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 132,
+    "title": "Phase 4 收尾 + 写总复盘",
+    "hours": 4.0,
+    "summary": "把 5 周体系化。",
+    "subs": [
+      {
+        "name": "整理 LLM 工程师必备知识图谱",
+        "hours": "2h"
+      },
+      {
+        "name": "写 blog：从 0 到 mini-LLaMA 的 5 周",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 133,
+    "title": "Phase 4 完成 + 验收日",
+    "hours": 4.0,
+    "summary": "mini-LLaMA + DPO + vLLM + 量化。",
+    "subs": [
+      {
+        "name": "验收清单：4 个里程碑各跑一次",
+        "hours": "2h"
+      },
+      {
+        "name": "提交完整 repo + blog",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 134,
+    "title": "RAG 基础：检索 + 生成",
+    "hours": 4.0,
+    "summary": "Phase 5 启动。",
+    "subs": [
+      {
+        "name": "RAG 范式 + Naive RAG 流程",
+        "hours": "1.5h"
+      },
+      {
+        "name": "LangChain / LlamaIndex RAG 实现",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 135,
+    "title": "稠密检索 + BM25",
+    "hours": 4.0,
+    "summary": "检索的核心。",
+    "subs": [
+      {
+        "name": "BM25 算法 + 倒排索引",
+        "hours": "2h"
+      },
+      {
+        "name": "BGE / M3E 稠密检索",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 136,
+    "title": "向量数据库：Milvus / Qdrant",
+    "hours": 4.0,
+    "summary": "工业级存储。",
+    "subs": [
+      {
+        "name": "Milvus / Qdrant 对比",
+        "hours": "1.5h"
+      },
+      {
+        "name": "Qdrant 部署 + 1M 文档压测",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 137,
+    "title": "Rerank + HyDE + Multi-Query",
+    "hours": 4.0,
+    "summary": "检索质量提升。",
+    "subs": [
+      {
+        "name": "Rerank 模型原理 (BGE-reranker / Cohere)",
+        "hours": "1.5h"
+      },
+      {
+        "name": "HyDE + Multi-Query 实现",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 138,
+    "title": "GraphRAG (Microsoft)",
+    "hours": 4.0,
+    "summary": "知识图谱增强。",
+    "subs": [
+      {
+        "name": "GraphRAG 论文精读",
+        "hours": "2h"
+      },
+      {
+        "name": "用 neo4j + LLM 搭一个简化 GraphRAG",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 139,
+    "title": "RAG 评估 (RAGAS / TruLens)",
+    "hours": 4.0,
+    "summary": "RAG 的真相。",
+    "subs": [
+      {
+        "name": "RAGAS 评估指标",
+        "hours": "1.5h"
+      },
+      {
+        "name": "评估自己的 RAG 系统",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 140,
+    "title": "Week 20 复盘 + RAG 项目整合",
+    "hours": 4.0,
+    "summary": "Phase 5 第一阶段收尾。",
+    "subs": [
+      {
+        "name": "把 RAG 流程封装成服务（FastAPI）",
+        "hours": "3h"
+      },
+      {
+        "name": "写 blog：RAG 系统的工程实践",
+        "hours": "1h"
+      }
+    ]
+  },
+  {
+    "day": 141,
+    "title": "ReAct + Reflexion",
+    "hours": 4.0,
+    "summary": "Agent 基础范式。",
+    "subs": [
+      {
+        "name": "ReAct 论文精读",
+        "hours": "2h"
+      },
+      {
+        "name": "手写 ReAct agent",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 142,
+    "title": "Plan-and-Execute + Tool Use",
+    "hours": 4.0,
+    "summary": "复杂任务分解。",
+    "subs": [
+      {
+        "name": "Plan-and-Execute 论文",
+        "hours": "1.5h"
+      },
+      {
+        "name": "实现 planner + executor",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 143,
+    "title": "Multi-Agent 编排 (LangGraph)",
+    "hours": 4.0,
+    "summary": "你目标里的核心。",
+    "subs": [
+      {
+        "name": "LangGraph 状态机原理",
+        "hours": "2h"
+      },
+      {
+        "name": "搭一个 3-agent 协作系统",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 144,
+    "title": "Function Calling 协议",
+    "hours": 4.0,
+    "summary": "Agent 工具调用标准。",
+    "subs": [
+      {
+        "name": "OpenAI / Anthropic Function Calling 规范",
+        "hours": "1.5h"
+      },
+      {
+        "name": "实现自定义 tool 框架",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 145,
+    "title": "Agent 可观测性 (Langfuse / Arize Phoenix)",
+    "hours": 4.0,
+    "summary": "生产环境必修。",
+    "subs": [
+      {
+        "name": "Langfuse 自部署",
+        "hours": "2h"
+      },
+      {
+        "name": "Agent trace 接入",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 146,
+    "title": "Agent 评估",
+    "hours": 4.0,
+    "summary": "怎么测 Agent。",
+    "subs": [
+      {
+        "name": "AgentBench 概览",
+        "hours": "1.5h"
+      },
+      {
+        "name": "写自定义 Agent eval suite",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 147,
+    "title": "Week 21 复盘 + Agent 项目整合",
+    "hours": 4.0,
+    "summary": "形成可演示项目。",
+    "subs": [
+      {
+        "name": "把 Agent 系统部署成 demo",
+        "hours": "3h"
+      },
+      {
+        "name": "录一段 5 分钟 demo 视频",
+        "hours": "1h"
+      }
+    ]
+  },
+  {
+    "day": 148,
+    "title": "Vision Transformer (ViT)",
+    "hours": 4.0,
+    "summary": "视觉 transformer 基础。",
+    "subs": [
+      {
+        "name": "ViT 论文精读",
+        "hours": "2h"
+      },
+      {
+        "name": "PyTorch 实现 ViT-tiny on CIFAR-10",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 149,
+    "title": "Qwen2.5-VL 部署",
+    "hours": 4.0,
+    "summary": "你目标里的视频分析。",
+    "subs": [
+      {
+        "name": "Qwen2.5-VL-7B 部署",
+        "hours": "2h"
+      },
+      {
+        "name": "写一个视频理解 demo",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 150,
+    "title": "Whisper 部署 + 音频处理",
+    "hours": 4.0,
+    "summary": "你目标里的语音转写。",
+    "subs": [
+      {
+        "name": "Whisper-large-v3 部署",
+        "hours": "1.5h"
+      },
+      {
+        "name": "音频特征工程（梅尔谱 / MFCC）",
+        "hours": "2.5h"
+      }
+    ]
+  },
+  {
+    "day": 151,
+    "title": "Paraformer / SenseVoice（中文 ASR）",
+    "hours": 4.0,
+    "summary": "中文 ASR 工业方案。",
+    "subs": [
+      {
+        "name": "Paraformer 论文 + 部署",
+        "hours": "2h"
+      },
+      {
+        "name": "对比 Whisper / Paraformer on 中文数据",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 152,
+    "title": "视频 + 语音 Agent 整合",
+    "hours": 4.0,
+    "summary": "把多模态串成 Agent。",
+    "subs": [
+      {
+        "name": "搭：上传视频 → 抽关键帧 + 转写音轨 → 总结 Agent",
+        "hours": "3h"
+      },
+      {
+        "name": "接入 Langfuse 可观测",
+        "hours": "1h"
+      }
+    ]
+  },
+  {
+    "day": 153,
+    "title": "生产化：限流 / 灰度 / A/B 评估",
+    "hours": 4.0,
+    "summary": "你的工程底子发挥的地方。",
+    "subs": [
+      {
+        "name": "FastAPI 限流 + 多租户",
+        "hours": "2h"
+      },
+      {
+        "name": "简单 A/B 评估框架",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 154,
+    "title": "Week 22 复盘 + 完整项目",
+    "hours": 4.0,
+    "summary": "把 3 周串成端到端 demo。",
+    "subs": [
+      {
+        "name": "录一段完整 demo（10 分钟）",
+        "hours": "2h"
+      },
+      {
+        "name": "写 README + 部署文档",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 155,
+    "title": "端到端项目完善",
+    "hours": 4.0,
+    "summary": "最后的打磨。",
+    "subs": [
+      {
+        "name": "修 bug + 加测试 + 加 CI",
+        "hours": "2h"
+      },
+      {
+        "name": "写完整 README + 架构图",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 156,
+    "title": "技术博客：22 周复盘",
+    "hours": 4.0,
+    "summary": "知识体系化。",
+    "subs": [
+      {
+        "name": "写 blog：22 周 ML 学习复盘",
+        "hours": "2h"
+      },
+      {
+        "name": "整理 GitHub profile",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 157,
+    "title": "面试准备：ML 系统设计",
+    "hours": 4.0,
+    "summary": "你目标相关。",
+    "subs": [
+      {
+        "name": "整理 50 道 ML 系统设计题",
+        "hours": "2h"
+      },
+      {
+        "name": "用你的项目答一遍",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 158,
+    "title": "面试准备：DL 八股",
+    "hours": 4.0,
+    "summary": "面试必问。",
+    "subs": [
+      {
+        "name": "BN/LN 区别 / Adam vs SGD / 各种注意力",
+        "hours": "2h"
+      },
+      {
+        "name": "整理成 Anki 卡片",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 159,
+    "title": "模拟面试 + 复盘",
+    "hours": 4.0,
+    "summary": "压力测试。",
+    "subs": [
+      {
+        "name": "找朋友 mock interview",
+        "hours": "2h"
+      },
+      {
+        "name": "记录薄弱点 + 复盘",
+        "hours": "2h"
+      }
+    ]
+  },
+  {
+    "day": 160,
+    "title": "Phase 5 完成 + 22 周毕业",
+    "hours": 4.0,
+    "summary": "你的目标能落地了。",
+    "subs": [
+      {
+        "name": "提交最终项目 repo",
+        "hours": "2h"
+      },
+      {
+        "name": "写毕业 blog：22 周学完 ML 的复盘",
+        "hours": "2h"
+      }
+    ]
+  }
+]

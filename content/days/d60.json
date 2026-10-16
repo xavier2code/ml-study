@@ -1,0 +1,71 @@
+{
+  "day": 60,
+  "title": "注意力机制（Bengio 2014 / Bahdanau 2015）",
+  "sections": [
+    {
+      "h": "一个类比：边看边译",
+      "md": "人类译员不会先背完整句原文再闭卷默写德语——而是**眼睛来回扫**：译「der」时目光落在「the」，译「Katze」时落在「cat」。昨天 Seq2Seq 恰是「闭卷默写」：源句压成一个向量，解码全程只看这个摘要。\n\n注意力机制就是把「来回扫」交给模型：**解码器生成每个词时，先问一遍源句所有位置——谁跟我相关？——再按相关度加权取用信息**。两篇里程碑：Bengio 组 2014（soft retrieval 思想）与 Bahdanau et al. 2015《Neural Machine Translation by Jointly Learning to Align and Translate》——今天精读后者。"
+    },
+    {
+      "h": "Bahdanau 论文精读：对齐就是软查找",
+      "md": "动机一句话：编码器压固定维向量是瓶颈（长句 BLEU 骤降），应让解码器**直接访问全部源隐状态**。设编码器各步隐状态 h₁…h_T，解码器生成第 t 词前三步走：\n\n**① 打分**——用解码状态 sₜ₋₁ 给每个源位置 hⱼ 打相关分，加性打分：e(t,j) = vᵀ·tanh(W_s·sₜ₋₁ + W_h·hⱼ)——小网络判断「这个源词对当前要译的词多有用」。\n\n**② 归一化**——softmax 把分数变成和为 1 的权重：α(t,j) = softmax(e(t,j))。\n\n**③ 加权求和**——生成上下文向量：cₜ = Σⱼ α(t,j)·hⱼ。\n\n然后 cₜ 与 sₜ 一起预测下一个词。全过程**可微**、端到端训练，无对齐标注——对齐是**学出来的副产品**；α(t,j) 热力图与语言学家的对齐高度吻合——史上最著名的可解释性图之一。\n\n两个结论：注意力让长句性能不再随长度崩塌（消融的硬结论）；softmax 的「软」选择至关重要——硬选择不可微，学不动。"
+    },
+    {
+      "h": "为什么软加权这么强",
+      "md": "把注意力与熟悉概念对齐，机制就透了：\n\n**① 可微的字典查找**。硬字典 `dict[key]` 选择不可导；软字典按 query 与各 key 的相似度**混合**所有 value——梯度同时流向「选多少」与「内容」。\n\n**② content-based 寻址**。RNN 记忆按**时间**衰减；注意力按**内容**取数——任意位置一步直达，长依赖路径 O(1)。\n\n**③ 权重动态**。译动词时集中在动词、译冠词时在冠词——权重由当前 query 实时计算，不是固定参数。\n\n术语（后两天反复用）：提问方 **query**、被比较的 **key**、被取回的 **value**。Bahdanau 的 q 是解码器状态，k/v 都是编码器隐状态——这套词汇从这里走向 Transformer。"
+    },
+    {
+      "h": "PyTorch：给翻译 demo 加注意力",
+      "md": "改造昨天的 Seq2Seq：编码器返回**全部**隐状态，解码器每步做一次加性注意力：\n\n```python\nclass AttnDecoder(nn.Module):\n    def __init__(self, v_out, emb=128, hid=256):\n        super().__init__()\n        self.emb = nn.Embedding(v_out, emb)\n        self.rnn = nn.LSTMCell(emb + hid, hid)   # 输入拼接上下文\n        self.score = nn.Linear(hid * 2, hid)\n        self.v = nn.Linear(hid, 1, bias=False)\n        self.head = nn.Linear(hid * 2, v_out)\n    def attend(self, s, enc_out):      # s:(B,H) enc_out:(B,T,H)\n        T = enc_out.size(1)\n        s_exp = s.unsqueeze(1).expand(-1, T, -1)\n        e = self.v(torch.tanh(self.score(\n            torch.cat([s_exp, enc_out], -1)))).squeeze(-1)  # (B,T)\n        a = e.softmax(-1)              # α 权重\n        return (a.unsqueeze(-1) * enc_out).sum(1), a\n```\n\n逐词解码（训练时循环展开）：`ctx, α = attend(h, enc_out)` → LSTMCell 吃 `[emb(y_prev), ctx]` → 头部对 `[h, ctx]` 出 logits——各张量形状与昨天 Decoder 对齐。\n\n跑起来后：① 对比有无注意力的验证 loss——带注意力版收敛更快、长句优势明显；② **α 画成热力图**（`imshow`）：I↔ich、cat↔Katze 几乎在对角线上——复现了论文名图"
+    },
+    {
+      "h": "与 LLM 的关联",
+      "md": "三步「打分—归一化—加权」就是注意力的**全部**数学：Day 61 缩放点积只是把打分从「小 MLP」换成「点积」；Day 62 causal mask 只是给权重加三角形遮挡。Transformer 没有发明注意力，只是把它从「解码器外挂」升级为「唯一计算单元」。\n\n对照表：\n\n| | Bahdanau (2015) | Transformer (2017) |\n|---|---|---|\n| 打分 | 加性 MLP | 缩放点积 |\n| q 来自 | 解码器状态 | 任意（self/cross） |\n| 序列建模 | LSTM + 注意力 | 纯注意力 |\n| 训练并行性 | 受 LSTM 限制 | 全并行 |\n\n明天：把 query/key/value 的舞台从「翻译两边」搬到「同一句话内部」——self-attention，Transformer 的心脏。"
+    }
+  ],
+  "keyPoints": [
+    "注意力三步：打分 e(query,key) → softmax 归一化 α → 加权求和 c = Σ α·v",
+    "Bahdanau：加性打分 vᵀ·tanh(W_s·s + W_h·h)，对齐是学出来的副产品，α 热力图与语言学对齐吻合",
+    "本质是可微软查找：按内容寻址，任意两位置路径 O(1)，硬选择不可微学不动",
+    "术语：query（提问方）、key（被比较方）、value（被取回内容）",
+    "注意力解决长句瓶颈：编码器不再需要把整句压进一个固定维向量"
+  ],
+  "quiz": [
+    {
+      "q": "注意力机制中 softmax 的作用是？",
+      "options": ["把打分转换成和为 1 的权重分布，实现可微的软选择", "加快矩阵乘法", "消除梯度消失", "把向量归一化到单位长度"],
+      "answer": 0,
+      "explain": "softmax 让各候选的分数变成归一化权重，加权混合全部 value；选择过程可微，梯度能同时更新「选多少」与「内容」。"
+    },
+    {
+      "q": "Bahdanau 注意力的 query、key、value 分别来自哪里？",
+      "options": ["q=源句词向量，k=v=目标句状态", "q=解码器当前状态，k=v=编码器各步隐状态", "q=k=v=同一个词向量", "q=位置编码，v=词向量"],
+      "answer": 1,
+      "explain": "解码器状态作为 query 向源句所有位置查询，编码器隐状态既当 key（被比较）也当 value（被加权取回），这是 cross-attention 的原始形态。"
+    },
+    {
+      "q": "「注意力是可微的字典查找」这句话的含义是？",
+      "options": ["它返回 key 完全匹配的那条记录", "按相似度对所有 value 加权混合，梯度能流经权重与内容，可端到端训练", "它只能在 GPU 上运行", "它不需要参数"],
+      "answer": 1,
+      "explain": "硬查找的选择不可导、无法用梯度学习；软查找用相似度加权，整个检索过程可微，因此对齐能作为副产品被学出来。"
+    },
+    {
+      "q": "相比纯 Seq2Seq，加注意力后长句翻译不再崩塌的主要原因是？",
+      "options": ["参数量翻倍", "解码器每步可按内容直接访问全部源隐状态，不再依赖单一固定维句子向量", "使用了更大的词表", "beam search 更宽"],
+      "answer": 1,
+      "explain": "瓶颈在于整句压缩；注意力让信息按需从原位置实时取回，任意源词到任意目标步的路径长度都是 O(1)。"
+    },
+    {
+      "q": "把 α(t,j) 可视化成源×目标热力图，通常能观察到什么？",
+      "options": ["完全均匀的噪声", "近似对角线的词对齐结构，与人工对齐标注高度一致", "只集中在第一个词", "与输入内容无关"],
+      "answer": 1,
+      "explain": "模型从未见过对齐标注，对齐却作为翻译的副产品涌现——这是 Bahdanau 论文最著名的发现与最直观的可解释性证据。"
+    },
+    {
+      "q": "Transformer 的注意力与 Bahdanau 注意力最核心的传承与差异是？",
+      "options": ["数学完全不同", "三步框架（打分-归一化-加权）一脉相承，差异在打分用缩放点积、且注意力成为唯一计算单元", "Transformer 没有用到注意力", "Bahdanau 不需要编码器"],
+      "answer": 1,
+      "explain": "加性打分换成点积，LSTM 骨架被抛弃、注意力成为全部——但 softmax 加权取信息这一核心从 2015 年沿用至今。"
+    }
+  ]
+}

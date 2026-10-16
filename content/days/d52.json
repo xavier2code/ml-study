@@ -1,0 +1,72 @@
+{
+  "day": 52,
+  "title": "ResNet 残差连接",
+  "sections": [
+    {
+      "h": "问题：更深反而更差",
+      "md": "2015 年前的共识是「更深更好」，但实验撞墙：56 层的普通网络在 CIFAR-10 上**训练误差**都高于 20 层——这不是过拟合（训练集都差），是**优化问题**：太深的网络根本训不动。\n\n直觉解释：深层网络学到的映射接近恒等变换时，普通卷积层必须把一堆非线性权重「扭回」恒等——让层层叠叠的非线性去逼近「什么都不做」反而很难。\n\nResNet（He et al., 2015，CVPR 最佳论文）的问题设定极简：**如果浅网络已经不错，加深时多余的层只要学会恒等映射就不会变差**。残差连接就是给这个目标开了一条高速公路。结果：152 层照样训练，ImageNet top-5 错误率 3.57%，超过人类。\n\n> LLM 关联：Transformer 每个子层都是 `x + Sublayer(x)`——残差是 GPT 能堆几十上百层的直接前提。没有 ResNet 就没有今天的大模型。"
+    },
+    {
+      "h": "机制：梯度通畅性",
+      "md": "残差块把要学的映射 H(x) 改写为**残差** F(x) = H(x) − x：\n\n```\ny = x + F(x, W)\n```\n\n**前向**：学 F(x) = 0（让分支输出接近 0）比学 H(x) = x 容易得多——初始化得当时分支本来就接近 0，恒等是「默认值」而非「目标」。\n\n**反向（关键）**：对 x 求导，链式法则给\n\n```\n∂L/∂x = ∂L/∂y · (1 + ∂F/∂x)\n```\n\n那个 **+1** 是恒等通路的贡献：不管 F 的导数多小多乱，梯度至少原样直通上一层——乘法链里混进了加法，指数消失被结构性阻断。这就是「梯度通畅性」。\n\n工程细节：当输入输出形状不同（通道翻倍/空间减半）时，捷径用 1×1 卷积投影对齐（option B）；更稳的做法是 option D——最后一个 BN 的 γ 初始化为 0，分支初始输出为 0，整个块退化为恒等。"
+    },
+    {
+      "h": "实战：ResNet-20 on CIFAR-10",
+      "md": "用 He 论文的 CIFAR 版本（3 个 stage × n 个 BasicBlock，20 层 = n=3）。BasicBlock 比 Bottleneck 简单，适合入门：\n\n```python\nclass BasicBlock(nn.Module):\n    def __init__(self, cin, cout, stride=1):\n        super().__init__()\n        self.conv1 = nn.Conv2d(cin, cout, 3, stride=stride, padding=1, bias=False)\n        self.bn1   = nn.BatchNorm2d(cout)\n        self.conv2 = nn.Conv2d(cout, cout, 3, padding=1, bias=False)\n        self.bn2   = nn.BatchNorm2d(cout)\n        self.shortcut = (nn.Sequential(nn.Conv2d(cin, cout, 1, stride=stride, bias=False),\n                                       nn.BatchNorm2d(cout))\n                         if stride != 1 or cin != cout else nn.Identity())\n    def forward(self, x):\n        out = F.relu(self.bn1(self.conv1(x)))\n        out = self.bn2(self.conv2(out))\n        return F.relu(out + self.shortcut(x))   # 残差相加在 ReLU 之前\n```\n\n组装：`Conv3×3-16 → [3×Block16] → [3×Block32,s2] → [3×Block64,s2] → GAP → FC10`。注意两个细节：卷积层不带 bias（BN 会抵消它）；空间下采样靠 stride=2 卷积而非池化。\n\n**消融实验（今天的重点作业）**：把 `out + self.shortcut(x)` 改成 `out`，同样的代码就是 PlainNet-20——对照训练，亲眼看到 plain 版训练误差更高。这一个实验胜过十篇博客。"
+    },
+    {
+      "h": "训练与结果预期",
+      "md": "标准配方（He 论文原版 + Day 47 调度）：\n\n- SGD momentum 0.9，weight decay 5e-4，LR 0.1\n- cosine 或阶梯衰减（60/120/160 epoch 各 ÷10，共 200）\n- batch 128，增强先用 flip + random crop（明天加更强的）\n\n预期曲线：ResNet-20 在 **~91%** 附近收敛；PlainNet-20 落后 1~3 个点且收敛慢。用 Day 49 的监控盯两层梯度直方图：plain 网络深层梯度明显更小——残差版的直方图各层几乎同宽，这就是通畅性的可视化。\n\n变体速览：ResNet-50/101/152 用 Bottleneck（1×1 降维 → 3×3 → 1×1 升维）省计算；PreAct 把 BN/ReLU 提到卷积前、恒等通路上无任何运算，梯度更纯。今天实现的「卷后 BN、加后 ReLU」是经典原版，够用且好懂。"
+    },
+    {
+      "h": "今日串联",
+      "md": "残差连接的两句话总结：**前向让恒等成为默认**（学 F≈0 比 学 H≈x 容易），**反向给梯度一条 +1 直通道**（1 + ∂F/∂x）。从此「加深」不再是奢望，深度学习进入百层时代；Transformer 的每个子层都在用这招。\n\n明日预告：ResNet-20 能到 91%，但想冲 93%+ 还差一块拼图——数据增强。"
+    }
+  ],
+  "keyPoints": [
+    "深层退化是优化问题不是过拟合：56 层 plain 网络训练误差高于 20 层",
+    "残差改写 y = x + F(x)：学 F≈0（恒等为默认）比学恒等映射本身容易",
+    "反向梯度 ∂L/∂x = ∂L/∂y · (1 + ∂F/∂x)，+1 恒等通路结构性阻断梯度指数消失",
+    "形状不匹配时捷径用 1×1 卷积投影；更稳的 option D 把分支末 BN 的 γ 初始化为 0",
+    "ResNet-20 = 3 stage × 3 BasicBlock + GAP；残差相加在 ReLU 之前，卷积层不加 bias（配 BN）",
+    "Transformer 每个子层 x + Sublayer(x) 是残差思想的直接沿用——它是大模型能堆深的前提"
+  ],
+  "quiz": [
+    {
+      "q": "56 层网络比 20 层的「训练误差」还高，这说明问题出在？",
+      "options": ["过拟合", "优化困难（训不动），不是泛化问题", "数据集太小", "评估 bug"],
+      "answer": 1,
+      "explain": "过拟合看的是训练好/验证差；训练集本身都变差说明深层网络难以优化，正是 ResNet 论文要解决的现象。"
+    },
+    {
+      "q": "残差块反向传播公式 ∂L/∂x = ∂L/∂y · (1 + ∂F/∂x) 中，+1 项的意义是？",
+      "options": ["让输出永远为正", "恒等通路保证梯度至少原样回传，阻断指数消失", "增大学习率", "代替 BatchNorm"],
+      "answer": 1,
+      "explain": "乘法链中混入加法：即使 ∂F/∂x 很小或混乱，梯度也有一条无损直达的加法通路，这是「梯度通畅性」的核心。"
+    },
+    {
+      "q": "残差块在通道翻倍、空间减半时，shortcut 怎么处理？",
+      "options": ["直接相加，形状自动广播", "用 1×1 卷积（stride 匹配）把 x 投影到输出形状", "复制 x 两次", "跳过该块"],
+      "answer": 1,
+      "explain": "形状不同的张量无法相加；1×1 卷积以相同 stride 下采样并升维，代价极小；更稳的 option D 还把分支末 BN 的 γ 初始化为 0。"
+    },
+    {
+      "q": "BasicBlock 中卷积层设 bias=False 的原因是？",
+      "options": ["省那一点点参数", "后面紧跟 BN，其 β 参数已吸收偏置作用，再设 bias 冗余", "bias 会 NaN", "为了兼容 GAP"],
+      "answer": 1,
+      "explain": "BN 先减均值再仿射，卷积的 bias 会被完全抵消，BN 的 β 完全接管偏置功能；去掉它是 ResNet 代码的标准写法。"
+    },
+    {
+      "q": "残差相加和激活函数的顺序，经典 ResNet 中是？",
+      "options": ["先 ReLU 再相加", "先相加再 ReLU：F.relu(out + shortcut(x))", "顺序无关紧要", "两个分支各自 ReLU 后相加"],
+      "answer": 1,
+      "explain": "原版先加后 ReLU，让恒等通路上尽量「干净」；PreAct 更进一步把 BN/ReLU 全部移到卷积前，通路上无任何非线性运算。"
+    },
+    {
+      "q": "ResNet 对后续大语言模型的直接影响是？",
+      "options": ["提供了 attention 机制", "残差连接让 Transformer 能堆几十上百层，是 GPT 架构的前提之一", "提供了 tokenizer", "提供了 RLHF 算法"],
+      "answer": 1,
+      "explain": "Transformer 每个子层都是 x + Sublayer(x)，与 ResNet 同一思想：没有残差保证的梯度通畅，百层级的深度网络（包括 LLM）都训不起来。"
+    }
+  ]
+}

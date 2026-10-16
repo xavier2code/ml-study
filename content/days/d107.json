@@ -1,0 +1,71 @@
+{
+  "day": 107,
+  "title": "用 TRL 做 SFT",
+  "sections": [
+    {
+      "h": "为什么用 TRL 而不是手写训练循环",
+      "md": "昨天备好 5K 中文指令数据，今天把它变成一个「会听话」的模型。工具选 **TRL（Transformer Reinforcement Learning）**——HuggingFace 官方的对齐训练库，SFT/DPO/RLHF 全家桶。\n\n直觉：SFT 的前向反向和预训练完全一样（都是 next-token 交叉熵），差别只有两处：数据要套对话模板、**loss 只算 assistant 部分**。这两处恰恰是最容易手写出 bug 的地方（模板 token 数错一位、mask 错一个位置，训练表面正常但模型学废）。TRL 把这两处做成了经过千锤百炼的库代码。\n\n与 Agent 关联：工业界给 Agent 换基座、做领域适配，走的正是这条 TRL 流水线——你今天学的是可直通简历的技能。"
+    },
+    {
+      "h": "SFTTrainer 原理",
+      "md": "**1. 对话模板（chat template）**。把 messages 数组渲染成模型实际看到的 token 序列：\n\n```\n<|im_start|>user\n解释什么是过拟合<|im_end|>\n<|im_start|>assistant\n过拟合是指……<|im_end|>\n```\n\n模板由 tokenizer 内嵌的 Jinja2 定义，同一个模板保证训练与推理时格式一致——训练用 A 模板、推理用 B 模板是新手翻车第一名。\n\n**2. Loss masking（今天的灵魂）**。交叉熵逐 token 计算时，把 user 部分（含模板标记）的 label 设为 -100：\n\n```python\nlabels = input_ids.clone()\nlabels[:, :assistant_start] = -100   # PyTorch 的 ignore_index\n# → loss 只统计 assistant 生成的 token\n```\n\n为什么？如果连问题一起算 loss，模型学到的是「模仿用户提问」，而不是「回答问题」。\n\n**3. 超参基调**：SFT 的 lr 远小于预训练（1e-5 ~ 2e-5 vs 6e-4），epoch 2~3，因为小数据大力出奇迹只会过拟合。"
+    },
+    {
+      "h": "对 mini-LLaMA 做 SFT：动手",
+      "md": "完整流程四步：\n\n```python\nfrom trl import SFTTrainer, SFTConfig\nfrom transformers import AutoModelForCausalLM, AutoTokenizer\n\nmodel = AutoModelForCausalLM.from_pretrained(\"./ckpt/minillama-base\")\ntok = AutoTokenizer.from_pretrained(\"./ckpt/minillama-base\")\n\ncfg = SFTConfig(\n  output_dir=\"./sft_out\",\n  per_device_train_batch_size=8,\n  gradient_accumulation_steps=4,\n  learning_rate=2e-5,           # 预训练的 1/30\n  num_train_epochs=3,\n  bf16=True, logging_steps=10,\n  max_length=1024,\n)\ntrainer = SFTTrainer(\n  model=model, args=cfg, processing_class=tok,\n  train_dataset=load_jsonl(\"data/sft_zh_5k.jsonl\"),  # conversations 格式\n)\ntrainer.train()\ntrainer.save_model(\"./ckpt/minillama-sft\")\n```\n\n训练中盯两件事：loss 应从 ≈2 快速降到 1.x 并走平；第 1 个 epoch 结束后 val loss 若不再降，就早停——5K 数据 3 个 epoch 通常到顶。\n\n训练后立刻验证：\n\n```\nuser：请用一句话解释什么是过拟合\nsft 模型：过拟合是指模型在训练数据上表现很好…… ✓ 会听话了\n```\n\n对比昨天的 base 输出（续写出乱七八糟的问句），SFT 前后判若两模。"
+    },
+    {
+      "h": "常见坑与排查",
+      "md": "| 症状 | 原因 | 修复 |\n|---|---|---|\n| SFT 后模型只会复读问题 | loss mask 没生效，user token 也被学 | 检查 labels 里 -100 的位置 |\n| 输出夹杂 <|im_end|> 不停 | 训练/推理模板不一致 | 统一用 tok.apply_chat_template |\n| loss 快速降到 0.0x | 过拟合 + 数据重复 | 减 epoch、查去重 |\n| 回答流畅但答非所问 | 数据里 instruction/answer 错位 | 抽样 20 条人工核对源数据 |\n| 生成全是重复短句 | lr 过高把预训练权重打坏 | lr 降到 1e-5 重跑 |\n\n> 排查黄金手段：**解码一个训练 batch**。把送进模型的 input_ids 解码打印，肉眼确认模板正确、mask 边界正确——九成「玄学失败」死在这一眼上。"
+    },
+    {
+      "h": "今日串联",
+      "md": "今天的关键认知：SFT = 预训练目标（next-token 交叉熵）+ 两个工程细节（对话模板、assistant-only loss mask）。TRL 帮你把细节做对，但「能解码 batch 肉眼验证」是你自己的保险丝。\n\n你的 mini-LLaMA 现在会听话了，但它还分不清「好答案」和「差答案」——它只见过标准答案，没见过被拒绝的答案。明日预告：DPO 原理——用 chosen/rejected 偏好对教模型「选好的」。"
+    }
+  ],
+  "keyPoints": [
+    "SFT 与预训练同目标（next-token 交叉熵），差别在对话模板 + assistant-only loss mask",
+    "loss mask：user 部分与模板标记的 label 设 -100，否则模型学会模仿提问而非作答",
+    "SFT 超参基调：lr 1e-5~2e-5（预训练的 1/30）、epoch 2~3、小数据宁少勿过",
+    "训练与推理必须用同一 chat template，模板不一致是新手翻车第一名",
+    "排查黄金手段：解码一个训练 batch 肉眼检查模板与 mask 边界"
+  ],
+  "quiz": [
+    {
+      "q": "SFT 与预训练在训练目标上的关系是？",
+      "options": ["完全不同的损失函数", "同一个 next-token 交叉熵，差别只在数据形式与 loss mask", "SFT 用 MSE", "SFT 不需要梯度"],
+      "answer": 1,
+      "explain": "SFT 沿用交叉熵，只是数据换成对话样本且只对 assistant token 算 loss。正因如此才能用同一套 Trainer 基建。"
+    },
+    {
+      "q": "loss mask 把 user 部分 label 设为 -100（ignore_index）。如果不设，最直接的后果是？",
+      "options": ["显存翻倍", "模型把「模仿用户提问」也当作学习目标，倾向复读问题而非回答", "训练速度变慢", "无法收敛，loss 一直是 NaN"],
+      "answer": 1,
+      "explain": "user token 也进交叉熵，等于教模型预测「下一个问题长什么样」。常见症状就是收到指令后继续生成新的问句。"
+    },
+    {
+      "q": "SFT 的学习率为什么要比预训练小约 30 倍？",
+      "options": ["为了省电", "5K 小数据上大步长会破坏预训练学到的语言能力（灾难性遗忘）", "TRL 强制规定的", "为了 loss 下降更快"],
+      "answer": 1,
+      "explain": "预训练权重是宝贵先验，小 lr 微调是在「微调行为、不动知识」；lr 过大模型会忘记怎么说话，只剩重复短句。"
+    },
+    {
+      "q": "SFT 后模型输出流畅但经常答非所问，优先排查什么？",
+      "options": ["显卡驱动", "源数据 instruction 与 answer 是否错位配对", "batch size", "wandb 配置"],
+      "answer": 1,
+      "explain": "答非所问说明「问题→答案」的映射本身错了，最常见的根源是数据管线张冠李戴。抽样 20 条源数据人工核对最直接。"
+    },
+    {
+      "q": "「解码一个训练 batch 肉眼检查」主要在验证什么？",
+      "options": ["显卡利用率", "模板渲染与 mask 边界是否正确——input 是否按预期拼好、-100 是否恰好盖住 user 部分", "loss 数值精度", "tokenizer 速度"],
+      "answer": 1,
+      "explain": "模板与 mask 是 SFT 最易错的两处，且错误不会报错、只在生成质量上露馅。解码 batch 是成本最低的一手验证。"
+    },
+    {
+      "q": "SFT 模型现在「会听话」但仍可能输出质量平平，下一步自然的改进方向是？",
+      "options": ["把 epoch 加到 20", "用偏好数据（chosen/rejected）做 DPO，教模型分辨好坏答案", "换更大的 batch", "删掉 loss mask"],
+      "answer": 1,
+      "explain": "SFT 只见过标准答案，没见过「差答案长什么样」；偏好对比才能拉开好答案与差答案的概率差——这正是明天的 DPO。"
+    }
+  ]
+}

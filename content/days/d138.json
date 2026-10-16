@@ -1,0 +1,65 @@
+{
+  "day": 138,
+  "title": "GraphRAG (Microsoft)",
+  "sections": [
+    {
+      "h": "向量 RAG 的盲区",
+      "md": "Day 134 列过 Naive RAG 的失败类型，其中两类是向量检索的**结构性盲区**，调参救不了：\n\n- **全局性问题**：\"这 500 份客户投诉的主要主题是什么？\"——没有哪个具体 chunk 是\"答案\"，答案是对全量文档的聚合，而向量检索只能找局部相似\n- **多跳关系问题**：\"A 公司通过哪些中间实体与 B 公司存在关联？\"——答案分散在多条边上，需要沿图遍历，而 embedding 只会算两两相似度\n\nMicrosoft GraphRAG（2024）的思路：**用 LLM 在索引期把语料建成知识图谱 + 层次化社区摘要**，让检索同时具备\"全局视野\"与\"多跳路径\"。代价是索引成本高一个量级——记住这个 trade-off，它是今天所有工程决策的轴心。"
+    },
+    {
+      "h": "索引管线：从文档到社区摘要",
+      "md": "GraphRAG 的离线管线五步：\n\n1. **分块**：常规文本切分\n2. **LLM 抽取**：对每个 chunk 用 prompt 抽取实体（人/组织/概念）、关系（三元组 + 描述）、声明（claim，带强度与时间）\n3. **共指消歧**：把\"它 / 该公司\"归一到同一实体，避免图碎片化\n4. **社区检测**：对图跑 **Leiden 算法**（模块度最大化的层次化社区划分）——紧密关联的实体聚成社区，社区再递归聚合成层次树\n5. **社区摘要**：每个社区由 LLM 生成摘要；上层社区的摘要由下层社区摘要聚合而成\n\n直觉：Leiden 把\"话题圈子\"自动找出来——所有投诉相关的实体聚成一个社区，它的摘要就是一份现成的\"主题综述\"。这正是全局性问题需要的粒度。"
+    },
+    {
+      "h": "两种查询模式：Global 与 Local",
+      "md": "**Global Search**——回答全局性问题的 map-reduce：\n\n```text\nquery ─→ 分发给每个社区摘要（map：各社区生成带分数的部分答案）\n      ─→ 汇总高分部分答案（reduce：合成最终答案）\n```\n\n社区数量可控制 map 并行度与 token 总量；论文在 sensemaking 类任务（\"数据集的主要主题\"）上大幅超过向量 RAG。\n\n**Local Search**——回答具体实体相关的问题：从 query 识别**种子实体** → 沿图扩展其邻域（相连实体、关系、关联文本块、所在社区的摘要）→ 把这团\"结构化上下文\"拼进 prompt 生成。适合\"X 和 Y 什么关系、X 参与了哪些事件\"这类局部多跳。\n\n选择器很简单：问整体→Global，问具体实体→Local，普通单跳事实→向量 RAG 就够。"
+    },
+    {
+      "h": "动手：neo4j + LLM 搭简化版",
+      "md": "忽略社区检测，用 neo4j 存 LLM 抽取的实体关系，实现 Local Search 的最小闭环：\n\n```python\nfrom neo4j import GraphDatabase\n\nEXT_PROMPT = \"\"\"从以下文本抽取实体和关系，输出 JSON：\n{{\"entities\": [{{\"name\":..., \"type\":...}}],\n  \"relations\": [{{\"src\":..., \"dst\":..., \"desc\":...}}]}}\n文本：{text}\"\"\"\n\ndef index_text(driver, text):\n    out = json.loads(llm.invoke(EXT_PROMPT.format(text=text)).content)\n    with driver.session() as s:\n        for e in out[\"entities\"]:\n            s.run(\"MERGE (n:Entity {name: $n}) SET n.type=$t\", n=e[\"name\"], t=e[\"type\"])\n        for r in out[\"relations\"]:\n            s.run(\"MATCH (a:Entity {name:$s}),(b:Entity {name:$d}) \"\n                  \"MERGE (a)-[r:REL {desc:$desc}]->(b)\", **r)\n\ndef local_search(driver, entity, hops=2):\n    with driver.session() as s:\n        return s.run(\n            \"MATCH (e:Entity {name:$name})-[r*1..%d]-(n) \" % hops +\n            \"UNWIND r AS rel RETURN n.name, rel.desc LIMIT 50\", name=entity).data()\n```\n\n要点：MERGE 保证同名实体合并（简化版共指消歧）；抽取 prompt 要 few-shot 且限制实体类型枚举，否则 LLM 抽出的类型五花八门；上下文拼装时把关系的 desc 原文带上——图的边描述往往比节点名信息量大。"
+    },
+    {
+      "h": "成本与工程决策",
+      "md": "GraphRAG 的索引成本 = 文档数 × 每块抽取调用，**通常比纯向量索引贵 10–100 倍 token**，且文档更新后社区摘要要重算（增量更新是活跃研究点，尚无便宜方案）。决策表：\n\n| 问题形态 | 方案 |\n|---|---|\n| FAQ、单跳事实查询 | 向量 RAG（便宜够用） |\n| 多跳关系、实体网络溯源 | GraphRAG Local |\n| 全局总结、主题分析 | GraphRAG Global |\n\n平台落地的折中方案：**只对核心实体子集建图**（先向量检索筛出高价值文档再抽取）；或采用 LightRAG 等轻量化变体。上线前必须回答两个问题：文档更新频率多高（决定重建成本）？全局性问题的真实占比多大（决定值不值）？明天讲怎么用数据回答——RAG 评估。"
+    }
+  ],
+  "keyPoints": [
+    "向量 RAG 的结构性盲区：全局聚合问题（无具体 chunk 是答案）与多跳关系问题（答案散在多条边上）",
+    "GraphRAG 索引管线：分块 → LLM 抽实体/关系/声明 → 共指消歧 → Leiden 社区检测 → 层次化社区摘要",
+    "Global Search 用 map-reduce 聚合各社区摘要答全局问题；Local Search 从种子实体沿邻域扩展答局部多跳",
+    "Leiden 自动找出\"话题圈子\"，社区摘要即现成的主题综述——这是全局视野的来源",
+    "索引 token 成本比向量 RAG 高 10–100 倍且增量更新难：按问题形态选型，可用核心子集建图降低成本"
+  ],
+  "quiz": [
+    {
+      "q": "\"这批调研访谈里客户最关心的主题有哪些\"——这类问题向量 RAG 效果差的原因是？",
+      "options": ["embedding 模型对中文支持不好", "答案是对全量文档的聚合，任何单个 chunk 都不是答案，而向量检索只能做局部相似匹配", "向量库容量不够", "需要更长的 prompt"],
+      "answer": 1,
+      "explain": "向量检索的单位是\"找与 query 相似的 chunk\"，全局总结型问题的答案分布在全部文档上。GraphRAG 的社区摘要（Leiden 聚类 + 逐层摘要）正是为聚合视野设计的——Global Search 在这类 sensemaking 任务上显著优于向量 RAG。"
+    },
+    {
+      "q": "Leiden 社区检测在 GraphRAG 索引管线中的作用是？",
+      "options": ["把文档按语言分组", "把紧密关联的实体聚成社区并构成层次结构，让每个社区可被摘要成\"主题综述\"供 Global 查询使用", "压缩向量索引", "去除停用词"],
+      "answer": 1,
+      "explain": "抽取出的实体关系图上跑 Leiden（模块度最大化的层次化划分），自动形成\"话题圈子\"；底层社区摘要详尽、上层递归聚合，Global Search 就在这些摘要上做 map-reduce。没有社区检测，图谱只是实体的海洋，无法回答全局问题。"
+    },
+    {
+      "q": "GraphRAG 的 Global Search 采用 map-reduce，map 阶段做的事情是？",
+      "options": ["对每个文档 chunk 做向量检索", "把 query 分发给各社区摘要，让每个社区独立生成带置信分数的部分答案", "训练一个摘要模型", "把图转成表格存储"],
+      "answer": 1,
+      "explain": "map：每个社区基于自己的摘要生成部分答案（带分数）；reduce：汇总高分部分答案合成最终回复。社区数量直接控制 map 的并行度与 token 预算——这是 GraphRAG 少数能\"调容量\"的旋钮。"
+    },
+    {
+      "q": "Local Search 的检索起点与扩展方式是？",
+      "options": ["从全量文档随机采样，用向量相似度排序", "从 query 识别种子实体，沿图扩展其邻域（相连实体、关系描述、关联文本块、社区摘要）拼成上下文", "从最高 PageRank 节点开始 BFS 全图", "把 query 直接发给每个社区摘要"],
+      "answer": 1,
+      "explain": "Local 面向\"具体实体相关\"的问题：种子实体的 k 跳邻域提供了结构化、可溯源的局部视野——实体、边描述、原文块混合拼装，天然支持多跳关系推理。"
+    },
+    {
+      "q": "团队想给 10 万篇文档上 GraphRAG，最应该先评估的是？",
+      "options": ["图数据库的硬盘容量", "索引 token 成本（LLM 抽取要遍历全量文档，比向量索引贵 10–100 倍）与文档更新频率（社区摘要重建代价）", "前端展示效果", "是否支持英文"],
+      "answer": 1,
+      "explain": "GraphRAG 的两个经济硬约束：索引期全量 LLM 抽取的 token 开销，和更新后社区摘要重算的代价。若全局性/多跳问题占比很低，先对核心子集建图或用向量 RAG + 轻量变体（如 LightRAG）过渡更理性。"
+    }
+  ]
+}

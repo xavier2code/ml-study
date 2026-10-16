@@ -1,0 +1,65 @@
+{
+  "day": 47,
+  "title": "学习率 + 优化器搜索",
+  "sections": [
+    {
+      "h": "学习率：训练中最贵的一个超参数",
+      "md": "学习率（LR）决定每步沿梯度走多远：太大在谷底两侧震荡甚至发散，太小训练慢且容易陷在坏区域。它是对结果影响最大的超参数——**调好 LR 的收益常常大于换模型**。\n\n经验区间（纯直觉，先有数量级）：\n\n- SGD：1e-2 ~ 1e-1 起步\n- Adam/AdamW：1e-4 ~ 3e-3 起步\n- 微调预训练 LLM：1e-5 ~ 1e-4（比预训练小 2~3 个数量级）\n\n网格搜索太贵：一次训练几十分钟，试 20 个 LR 就是一天。**LR finder** 用一次短训练就把整条曲线扫出来。\n\n> 与 LLM 的关联：微调时的第一件事几乎都是找 LR——预训练模型的 loss 面貌和教科书例子不同，盲抄别人的 2e-5 经常不灵。"
+    },
+    {
+      "h": "LR finder 原理：一次训练扫全部量级",
+      "md": "来自 Leslie Smith 的经典技巧（2015）。直觉：如果 LR 从极小指数增长到极大，loss 的变化会「讲故事」——\n\n1. LR 太小时 loss 几乎不动（下降太慢）\n2. LR 合适时 loss 快速下降（黄金区间）\n3. LR 太大时 loss 反弹飙升（越过谷底）\n\n机制：让 LR 随 batch 指数递增 `lr = lr₀ · γ^step`（γ 取 1.02~1.1），每个 step 记录平滑后的 loss，画出 **loss–LR 曲线**，取 loss 下降最陡处的 LR（fastai 默认把最低点除以 10）。\n\n```python\nmodel = Net().to(dev)\nopt = torch.optim.SGD(model.parameters(), lr=1e-7)\nlr, gamma = 1e-7, 1.05\nlosses, lrs = [], []\nfor xb, yb in loader:\n    loss = F.cross_entropy(model(xb), yb)\n    opt.zero_grad(); loss.backward(); opt.step()\n    losses.append(loss.item()); lrs.append(lr)\n    for g in opt.param_groups: g['lr'] *= gamma\n```\n\n注意：finder 只是「侦察兵」，跑几十到几百个 batch 即可；它会污染权重，**找到 LR 后必须重新初始化模型**再正式训练。"
+    },
+    {
+      "h": "CIFAR-10 实战：找 best LR",
+      "md": "用前几周搭好的小 CNN，完整走一遍流程：\n\n1. 重新初始化模型，`lr₀ = 1e-7`，γ = 1.05，跑到 LR 达到 10 左右或 loss 明显爆炸为止\n2. 对 loss 做滑动平均平滑，画 log–log 图\n3. 读出下降最陡的 LR——SGD + momentum 场景下 CIFAR-10 小网络通常落在 **0.05 ~ 0.3** 区间\n4. 验证：用候选 LR 各训 3~5 个 epoch，比较验证准确率\n\n实验预期：LR = 10 时 loss 直接飞到 NaN；LR = 1e-5 几乎水平线；中间某处斜率最陡。把这张图存下来——它是你调参经验的「锚点」。\n\n**优化器对比**：同网络换 AdamW，best LR 通常比 SGD 小一到两个数量级（1e-3 附近），且对 LR 更宽容（半格偏差影响不大）——自适应优化器用二阶矩缩放了步长，代价是泛化有时略差。"
+    },
+    {
+      "h": "学习率调度：LR 不是常数",
+      "md": "找到 best LR 只是起点，成熟训练都会**随时间改变 LR**：\n\n- **Step / cosine 衰减**：前期大步快速下降，后期小步精细收敛。cosine 从 lr_max 平滑降到接近 0，是当前默认选择\n- **Warmup**：前几个 epoch 从 0 线性升到 lr_max，避免初始权重差、梯度大时被大 LR 打飞；Transformer 训练必备\n- **One cycle**：Smith 的又一贡献——warmup 升到峰值再降到接近 0，连 momentum 也同步反向调度，往往能用最短时间达到最好精度\n\n```python\nsched = torch.optim.lr_scheduler.OneCycleLR(\n    opt, max_lr=0.1, steps_per_epoch=len(loader), epochs=100)\n# 每个 step 后调用 sched.step()\n```\n\n> LLM 关联：GPT/LLaMA 的训练配方都是「warmup + cosine 衰减」，warmup 步数约占总步数的 0.5%~3%。你今天在小 CIFAR 网络上调的东西，和生产训练是同一套思想。"
+    },
+    {
+      "h": "今日串联",
+      "md": "**LR finder**（一次指数扫略定位黄金区间）→ **best LR 验证**（短训对比）→ **调度策略**（warmup + cosine / one-cycle 让 LR 动起来）。这套流程把「玄学调参」变成一小时的例行公事。\n\n明日预告：为什么有的初始化能让 loss 一开始就很好、有的直接 NaN——Xavier 与 Kaiming 的方差守恒数学。"
+    }
+  ],
+  "keyPoints": [
+    "LR 是影响最大的超参数：SGD 常见 1e-2~1e-1，AdamW 常见 1e-4~3e-3，微调 LLM 更小",
+    "LR finder：LR 指数递增跑短训练，取 loss 下降最陡处；跑完必须重新初始化模型",
+    "AdamW 的 best LR 通常比 SGD 小 1~2 个数量级，且对 LR 更宽容",
+    "成熟配方 = warmup + cosine 衰减；one-cycle 常能在最短时间达到最好精度",
+    "warmup 防止训练初期（梯度大、权重差）被大 LR 打飞，Transformer 训练必备"
+  ],
+  "quiz": [
+    {
+      "q": "LR finder 曲线上，应该把 best LR 选在哪里？",
+      "options": ["loss 最低的那个点", "loss 下降最陡（斜率最负）的区域", "loss 开始升高的点", "LR 最大的点"],
+      "answer": 1,
+      "explain": "loss 最低点往往已接近发散边缘（再大一点就爆炸），选下降最陡处留出安全余量；fastai 的默认是最低点 LR 除以 10。"
+    },
+    {
+      "q": "跑完 LR finder 之后直接用当前权重继续正式训练，会有什么问题？",
+      "options": ["没问题，还省了初始化", "finder 用极端 LR 扫过的权重已被污染，结果不可信", "只需把 LR 改小即可继续", "只对 Adam 有影响"],
+      "answer": 1,
+      "explain": "扫略过程中大 LR 会把权重推向异常区域（甚至 loss 爆炸），正确做法是重新初始化模型再用找到的 LR 正式训练。"
+    },
+    {
+      "q": "同一网络，AdamW 的 best LR 相对 SGD 通常？",
+      "options": ["大 1~2 个数量级", "小 1~2 个数量级", "完全相同", "没有任何规律"],
+      "answer": 1,
+      "explain": "自适应优化器用梯度二阶矩缩放步长，等效步长更精准，所以合适 LR 更小（约 1e-3 vs SGD 的 0.1 量级），且对 LR 偏差更宽容。"
+    },
+    {
+      "q": "为什么 Transformer 训练要加 warmup？",
+      "options": ["让数据加载更平滑", "训练初期权重差、梯度大，大 LR 会把参数打飞，先小步热身更稳", "为了省显存", "为了提高学习率上限本身"],
+      "answer": 1,
+      "explain": "初期参数远离好区域、梯度噪声大，直接用峰值 LR 容易 loss 爆炸；warmup 让优化先稳定再提速，GPT/LLaMA 配方都含约 0.5%~3% 的 warmup 步数。"
+    },
+    {
+      "q": "one-cycle 调度的形状是？",
+      "options": ["恒定 LR 直到结束", "从 0 线性到峰值再降到接近 0", "从峰值线性降到 0", "每个 epoch 翻倍"],
+      "answer": 1,
+      "explain": "one-cycle 先 warmup 升到 max_lr，再平滑降回接近 0（momentum 反向同步），常能用最短训练时间拿到最好精度。"
+    }
+  ]
+}

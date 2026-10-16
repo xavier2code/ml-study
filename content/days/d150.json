@@ -1,0 +1,71 @@
+{
+  "day": 150,
+  "title": "Whisper 部署 + 音频处理",
+  "sections": [
+    {
+      "h": "给 Agent 装耳朵：语音是最高频的人类接口",
+      "md": "语音输入的信息密度和便捷性远超打字——会议、访谈、课程视频，都先有声音后有文字。今天两件事：部署 **Whisper-large-v3** 做转写，以及亲手做**音频特征工程**（梅尔谱/MFCC）。\n\n为什么模型不能直接吃波形？一段 10 秒 16kHz 的音频是 160000 个采样点——序列太长，且原始波形对模型极不友好（同一句话换个音量、语速，波形面目全非）。必须先变换到「听觉上有意义」的表示。这一步的原理适用于所有音频任务：ASR、说话人识别、语音情感分析、音乐信息检索。"
+    },
+    {
+      "h": "机制：从波形到梅尔谱图",
+      "md": "经典音频特征流水线四步，每步都在丢掉「人耳不敏感」的信息：\n\n1. **分帧加窗**：把波形切成 25ms 一帧（步长 10ms），每帧乘汉明窗，近似为平稳信号\n2. **FFT → 频谱**：每帧做傅里叶变换得到频率分布，拼接所有帧得**声谱图**（时间 × 频率的能量矩阵）\n3. **梅尔滤波器组**：把线性频率压到**梅尔刻度**——低频分辨率高、高频分辨率低，模仿人耳对音高的感知（1000Hz 以下近似线性，以上按对数）\n4. **对数压缩**：取 log，把动态范围压到与响度感知线性相关\n\n```\n波形 → |STFT|² → 梅尔滤波器组(80 个三角滤波器) → log → 梅尔谱\n再取 DCT 取前 13 系数 → MFCC（经典语音特征）\n```\n\n**梅尔谱 vs MFCC**：MFCC 是梅尔谱再做 DCT 去相关的产物，是传统模型（HMM-GMM 时代）的标配；深度学习时代直接用 log-梅尔谱即可——神经网络自己会学去相关。Whisper 的输入就是 80 维 log-梅尔谱。"
+    },
+    {
+      "h": "动手：librosa 十行看懂音频",
+      "md": "```python\nimport librosa, numpy as np\n\ny, sr = librosa.load(\"demo.wav\", sr=16000)   # Whisper 要求 16kHz\nprint(len(y)/sr, \"秒\")\n\n# 梅尔谱：n_mels=80, 窗 25ms, 步长 10ms\nS = librosa.feature.melspectrogram(\n    y=y, sr=sr, n_fft=400, hop_length=160, n_mels=80)\nlog_S = librosa.power_to_db(S)              # 转分贝\nprint(log_S.shape)   # (80, 帧数)，10 秒约 1001 帧\n\n# MFCC（对比用）\nmfcc = librosa.feature.mfcc(S=log_S, n_mfcc=13)\n\n# 能量与静音检测（VAD 的雏形）\nenergy = (log_S > energy_threshold).mean(axis=0)\n```\n\n两个实践要点：`hop_length=160`（10ms）是 ASR 标准帧移，Whisper 内部就是这样；画 `librosa.display.specshow(log_S)` 直观感受——**人声的共振峰在梅尔谱上呈明亮横条**，静音段一片黑，这是所有静音检测/切分算法的直觉来源。"
+    },
+    {
+      "h": "部署 Whisper-large-v3",
+      "md": "Whisper 的架构一句话：**log-梅尔谱 → 卷积下采样 → transformer encoder-decoder → 自回归吐文字 token**（多语言 + 时间戳 + 标点是联合训练的，30 秒一段滑窗处理长音频）。\n\n三种部署姿势：\n\n```python\n# 1. 官方库（调试用）\nimport whisper\nm = whisper.load_model(\"large-v3\")\nr = m.transcribe(\"meeting.mp4\", language=\"zh\", \n                 initial_prompt=\"以下是普通话会议的转写。\")\n\n# 2. faster-whisper（CTranslate2，推荐：快 4 倍、省一半显存）\nfrom faster_whisper import WhisperModel\nm = WhisperModel(\"large-v3\", device=\"cuda\", \n                  compute_type=\"float16\")\nsegs, info = m.transcribe(\"meeting.mp4\", vad_filter=True)\ntext = \" \".join(s.text for s in segs)\n```\n\n坑位备忘：中文标点靠 `initial_prompt` 引导效果好；长音频务必开 `vad_filter=True`（静音段不送模型，又快又少幻觉）；**纯中文场景它未必是最优——明天的 Paraformer 会来挑战它**。"
+    },
+    {
+      "h": "与 LLM/Agent 的关联",
+      "md": "转写文本是语音世界的「通用货币」：拿到文字后，摘要、问答、情感分析、会议纪要全部复用你已有的 LLM 工具链。多模态 Agent 的标准耳朵 = **VAD 切分 → Whisper 转写 → LLM 处理**。\n\n另一个方向是语音 LLM（Qwen2-Audio、GPT-4o-audio）：音频 token 直接进 LLM，省掉「先转文字」的瓶颈，能保留语气、情绪、说话风格。但在生产里，Whisper/Paraformer 这类专用 ASR 仍是准确率、延迟、成本的最优平衡——理解梅尔谱让你两个世界都能看懂。"
+    }
+  ],
+  "keyPoints": [
+    "音频特征流水线：分帧加窗 → STFT 声谱 → 梅尔滤波（模仿人耳非线性感知）→ log 压缩 → log-梅尔谱",
+    "MFCC = 梅尔谱再 DCT 取前 13 系数；深度学习时代直接用 log-梅尔谱，MFCC 属传统模型时代",
+    "ASR 标准参数：16kHz、25ms 窗（n_fft=400）、10ms 帧移（hop_length=160）、80 个梅尔滤波器组",
+    "Whisper 架构：梅尔谱 → 卷积前端 → encoder-decoder，30 秒滑窗；多语言/标点/时间戳联合训练",
+    "生产要点：faster-whisper 快 4 倍省一半显存；长音频开 vad_filter 防静音幻觉；中文标点用 initial_prompt 引导"
+  ],
+  "quiz": [
+    {
+      "q": "为什么梅尔刻度对低频给的分辨率比高频高？",
+      "options": ["为了减少计算量", "模仿人耳的听觉感知：低频区分辨率高、高频按对数压缩", "因为低频能量更大", "为了让 FFT 更快"],
+      "answer": 1,
+      "explain": "人耳对低频音高差异更敏感（如钢琴低音区间半音差更「远」），梅尔滤波器组把这种感知特性编码进特征。"
+    },
+    {
+      "q": "MFCC 与 log-梅尔谱的关系是？",
+      "options": ["两者完全等价", "MFCC 是 log-梅尔谱做 DCT 后取前若干系数，去掉了特征间相关性", "梅尔谱是 MFCC 的降维结果", "MFCC 只适用于音乐"],
+      "answer": 1,
+      "explain": "DCT 将能量沿梅尔频率轴压缩为少量系数并近似去相关——这是 HMM-GMM 时代的需要，神经网络时代用 log-梅尔谱即可。"
+    },
+    {
+      "q": "16kHz 音频、25ms 窗、10ms 帧移，一帧对应的采样点数和帧移采样点数分别是？",
+      "options": ["400 / 160", "160 / 400", "25 / 10", "16000 / 1600"],
+      "answer": 0,
+      "explain": "16000Hz × 0.025s = 400 点窗；16000Hz × 0.010s = 160 点帧移。这也是 n_fft=400、hop_length=160 的由来。"
+    },
+    {
+      "q": "生产环境部署 Whisper-large-v3，为什么推荐 faster-whisper？",
+      "options": ["它精度比官方模型高", "基于 CTranslate2 的量化优化，速度快约 4 倍、显存省约一半", "它不需要 GPU", "它支持更多语言"],
+      "answer": 1,
+      "explain": "faster-whisper 用 CTranslate2 推理引擎 + 量化，精度基本持平但吞吐和显存占用大幅优化，是生产标配。"
+    },
+    {
+      "q": "长音频转写出现大段重复或「幻觉文字」，最可能是哪类问题？",
+      "options": ["采样率设成了 44.1kHz", "静音段被强行转写（未开 VAD）导致模型脑补内容", "temperature 太低", "帧移不是 10ms"],
+      "answer": 1,
+      "explain": "Whisper 对长静音容易「编造」重复文本；开 vad_filter=True 过滤静音是标准解法，顺带显著加速。"
+    },
+    {
+      "q": "Whisper 的输入是什么？",
+      "options": ["原始波形采样点", "80 维 log-梅尔谱", "MFCC 13 维特征", "音频的 FFT 幅度谱"],
+      "answer": 1,
+      "explain": "Whisper 前端把 30 秒音频转成 80×3000 的 log-梅尔谱再进卷积层——今天学的特征正是它的输入格式。"
+    }
+  ]
+}

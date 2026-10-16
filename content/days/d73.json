@@ -1,0 +1,71 @@
+{
+  "day": 73,
+  "title": "FlashAttention 原理",
+  "sections": [
+    {
+      "h": "瓶颈不在计算，在搬运",
+      "md": "标准注意力要显式生成 N×N 的分数矩阵：N = 4096、float32 下，仅一层一头的分数矩阵就是 4096²×4B ≈ 64MB，softmax 还要再存一份中间结果。这些矩阵在 GPU 主显存（HBM）里被反复读写。\n\n近年 GPU 的**算力**涨得快、HBM **带宽**涨得慢——注意力的时间大头花在了搬运数据上，而不是乘法上。FlashAttention（2022）的目标就一句话：**全程不把 N×N 矩阵写进 HBM**。"
+    },
+    {
+      "h": "两块积木：分块 + 在线 softmax",
+      "md": "难点：softmax 的分母需要一整行的全局 max 与全局 sum，怎么分块算？**online softmax** 用两个运行量增量修正——来一个新块就更新一次：\n\n```\nm_new = max(m_old, max(新块))\n缩放因子 = e^(m_old − m_new)\nl_new = l_old · e^(m_old − m_new) + Σ e^(新块 − m_new)\n```\n\n（m 是当前行见过的最大值，l 是当前的部分和；旧贡献要乘缩放因子统一到新的基准上。）\n\nFlashAttention 把 Q、K、V 全部切成块，K/V 块装进片上 SRAM，逐块计算、增量更新输出，全程不物化 N×N 矩阵。**反向传播**时不保存中间注意力矩阵，需要时**重算**一遍——用便宜的计算换昂贵的显存，这笔账在 GPU 上是划算的。"
+    },
+    {
+      "h": "IO 复杂度与「精确」二字",
+      "md": "论文的核心结论是访存复杂度：标准注意力访问 HBM 为 **O(N² + N·d)**，FlashAttention 降到 **O(N²d²/M)**（M 为 SRAM 大小，d = 64~128 时远小于 N²）。同时显存从 O(N²) 降到 **O(N)**。\n\n特别强调：FlashAttention 的结果是**数学上精确的**，只是重排了计算顺序与访存路径——这与 Linformer、Performer 等稀疏/低秩**近似**方法有本质区别。省内存、更快、不掉精度，所以它迅速成为标配。"
+    },
+    {
+      "h": "上手：对比标准实现的速度",
+      "md": "```python\nimport torch, torch.nn.functional as F\nfrom flash_attn import flash_attn_func   # pip install flash-attn\n\nB, T, h, d = 2, 8192, 32, 128\nq = torch.randn(B, T, h, d, device='cuda', dtype=torch.bfloat16)\nk = torch.randn(B, T, h, d, device='cuda', dtype=torch.bfloat16)\nv = torch.randn(B, T, h, d, device='cuda', dtype=torch.bfloat16)\n\n# 标准实现：显式生成 (B,h,T,T) 的大矩阵\natt = (q @ k.transpose(-2, -1)) * d ** -0.5\nout_std = F.softmax(att, dim=-1) @ v\n\n# Flash 实现：不物化注意力矩阵\nout_flash = flash_attn_func(q, k, v, causal=True)\n# torch.allclose：数值一致（浮点误差内）\n```\n\n更省事的入口是 PyTorch 2.0+ 的 `F.scaled_dot_product_attention`——内置自动调度 Flash / 内存高效后端，不必手动装库。\n\n实验建议：分别取 T = 4k / 8k / 16k，用 `torch.cuda.Event` 计时、`torch.cuda.max_memory_allocated()` 记峰值显存，画两条曲线对比。差异是数量级的。"
+    },
+    {
+      "h": "与 LLM 的关联：长上下文的通行证",
+      "md": "现代 LLM 的 128k 上下文，军功章有一半属于 FlashAttention 系列：没有它，长序列训练的显存与速度都不可行。演进脉络：**v1**（2022，分块 + online softmax）→ **v2**（2023，更强的并行度与占用率）→ **v3**（Hopper 架构特化，异步与 FP8）。\n\n对 Agent 而言这是直接的生产力：上下文越长，能装下的工具返回值、检索文档、对话历史就越多——**效率技术扩展了 Agent 的工作记忆**。结合 d72 的 GQA/MLA，两条线共同把「注意力开多大」从研究问题变成了工程问题。"
+    }
+  ],
+  "keyPoints": [
+    "标准注意力的瓶颈是 HBM 读写（O(N²) 的分数矩阵被反复搬运），不是算力",
+    "online softmax：用 running max / running sum 增量修正，分块也能算出精确 softmax",
+    "反向传播不存中间矩阵、按需重算——用便宜计算换昂贵显存",
+    "HBM 访问从 O(N²+Nd) 降到 O(N²d²/M)，显存从 O(N²) 降到 O(N)，结果精确非近似",
+    "PyTorch 2.0+ 的 scaled_dot_product_attention 自动调度 Flash 后端"
+  ],
+  "quiz": [
+    {
+      "q": "FlashAttention 优化的主要瓶颈是什么？",
+      "options": ["矩阵乘的算力不足", "HBM 显存读写——避免物化并反复搬运 N×N 注意力矩阵", "softmax 的数值精度", "CUDA 核函数数量"],
+      "answer": 1,
+      "explain": "GPU 算力增速远超显存带宽；注意力时间花在搬运而非计算，Flash 把中间矩阵留在 SRAM 里。"
+    },
+    {
+      "q": "online softmax 解决的核心问题是？",
+      "options": ["softmax 本身计算太慢", "分块计算时拿不到全局 max/sum，用运行量 m、l 增量修正", "防止梯度爆炸", "减少参数量"],
+      "answer": 1,
+      "explain": "softmax 分母依赖整行统计量；m（运行最大）与 l（运行和）让每来一块都能把旧结果修正到新基准上。"
+    },
+    {
+      "q": "FlashAttention 是近似方法吗？",
+      "options": ["是，牺牲精度换速度", "不是——数学上精确，只是重排了计算顺序与访存路径", "只在长序列时近似", "只在反向传播时近似"],
+      "answer": 1,
+      "explain": "它输出与标准注意力在浮点误差内一致，区别于 Linformer/Performer 那类真正做近似的方案。"
+    },
+    {
+      "q": "反向传播中 FlashAttention 如何省显存？",
+      "options": ["直接丢弃部分梯度", "不保存注意力中间矩阵，反向时用保存的输出重算", "统一改用 fp16 存储", "跳过一半的头"],
+      "answer": 1,
+      "explain": "重算（recompute）策略：中间注意力矩阵不落盘，反向需要时再算一遍，计算便宜显存贵。"
+    },
+    {
+      "q": "不想手动安装 flash-attn 库，最省事的替代入口是？",
+      "options": ["手写 CUDA kernel", "PyTorch 2.0+ 的 F.scaled_dot_product_attention，自动调度后端", "用 numpy 重写", "减小 batch size"],
+      "answer": 1,
+      "explain": "PyTorch 内置的 SDPA 会根据硬件与配置自动选择 Flash / memory-efficient / 数学后端。"
+    },
+    {
+      "q": "为什么说 FlashAttention 是长上下文的「通行证」？",
+      "options": ["它提升了模型的理解能力", "它把长序列训练的显存与速度从不可行变为可行", "它替代了注意力机制本身", "它减小了模型参数量"],
+      "answer": 1,
+      "explain": "显存 O(N²)→O(N) 且大幅提速，128k 上下文的训练成本才落到工程可承受范围；能力没变，可行性变了。"
+    }
+  ]
+}

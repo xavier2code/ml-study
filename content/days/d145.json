@@ -1,0 +1,65 @@
+{
+  "day": 145,
+  "title": "Agent 可观测性 (Langfuse / Arize Phoenix)",
+  "sections": [
+    {
+      "h": "直觉：Agent 是黑盒车间",
+      "md": "RAG 时代出问题好排查：一条流水线，分段打印就行。多 Agent 系统是**黑盒车间**：supervisor 为什么把活派给 writer？researcher 调了三次 RAG 都查了什么？reviewer 打回的真实原因？token 花在哪一步？\n\n没有可观测性，调试 Agent 就像管理一个不上交周报的团队。**可观测性（observability）**的目标：把每次运行的完整轨迹（trace）自动记录下来，做到：\n\n- **看得见**：每个节点/工具调用的输入输出、耗时、token\n- **查得着**：按会话、用户、状态（成功/失败）过滤检索\n- **比得了**：版本之间、模型之间的指标对比"
+    },
+    {
+      "h": "机制：trace → span 的树状账本",
+      "md": "两家工具概念同构（Langfuse 开源可自部署，Phoenix 出身 ML 调试、对 LLM/评估友好）：\n\n- **Trace**：一次用户请求的完整生命周期，根节点\n- **Span/Generation**：trace 下的子节点——一次 LLM 调用（generation 记录模型、prompt、补全、token 数、耗时）、一次工具调用、一次检索\n\n```text\ntrace: 用户问「对比 A/B 数据库性能」 (12.4s, 8.2k tokens)\n├── generation: planner 拆任务 (0.8s, 1.1k)\n├── span: retriever.search (1.2s)\n│   └── generation: researcher 总结 (2.1s, 1.8k)\n├── generation: writer 成稿 (3.0s, 2.6k)\n└── generation: reviewer 审稿 (1.9s, 2.7k)\n```\n\n一眼看出瓶颈与花费分布。生产必修的原因也在这：用户说「答案错了」，你打开 trace 才能定位是检索没召回（retriever 的锅）还是生成篡改（writer 的锅）。\n\n### 自部署 Langfuse\n\n`docker compose up` 一条命令拉起（依赖 Postgres）；应用侧换 base_url 指向自己实例即可。数据不出内网——公司生产环境的硬要求。"
+    },
+    {
+      "h": "例子：Agent trace 接入三步",
+      "md": "**1. 装 SDK，配环境**：\n\n```python\nfrom langfuse import Langfuse\nlangfuse = Langfuse(public_key=..., secret_key=..., host=\"http://localhost:3000\")\n```\n\n**2. 给关键函数打点**——用装饰器或上下文管理器：\n\n```python\nfrom langfuse.decorators import observe\n\n@observe()                # 自动成为当前 trace 的子 span\ndef retriever_search(query):\n    docs = rag_service.search(query)\n    return docs\n\n@observe()                # 顶层调用自动创建 trace\ndef agent_run(question):\n    ...graph.invoke(state)\n```\n\n**3. 上报 metadata 打通业务维度**：给 trace 加 `user_id`、`session_id`、`version`（本次代码/prompt 版本号）。版本号是后续对比实验的前提。\n\n接入时机的心法：**第一天就接**。等系统复杂了再补，历史数据追不回来，A/B 对比就没了基线。"
+    },
+    {
+      "h": "与 LLM/Agent 的关联",
+      "md": "这周的工具串起来看：Day 143 的 LangGraph 每个节点天然对应 span（Langfuse 有官方集成，一行装饰器）；Day 144 的 function calling 每次工具执行都该是一个 span；明天 Day 146 的 Agent 评估，数据源就是今天攒下的 trace 库——离线评估集、失败 case 挖掘全从这里来。\n\n训练视角类比：可观测性之于 Agent，如同 WandB/loss 曲线之于训练——你在 Phase 4 天天看 loss 找发散，明天起看 trace 找「哪个节点在发散」。没有度量的优化是玄学，没有观测的 Agent 是盲盒。"
+    },
+    {
+      "h": "今日练习",
+      "md": "1. docker compose 自部署 Langfuse，注册项目拿到两个 key\n2. 给 3-agent 系统全部节点打 @observe，跑 10 个问题\n3. 在面板里回答三个问题：最贵的一步是哪个？失败 trace 里最常见的环节？researcher 平均几次工具调用？\n\n明日预告：有了 trace 数据，怎么系统化地给 Agent 打分——Agent 评估。"
+    }
+  ],
+  "keyPoints": [
+    "可观测性三目标：看得见（全链路输入输出）、查得着（按会话/状态过滤）、比得了（版本对比）",
+    "数据模型：trace（一次请求）→ span/generation（LLM 调用/工具/检索）树状结构，token 与耗时逐节点记账",
+    "Langfuse 开源可自部署（docker compose），Phoenix 出身 ML 调试、评估侧强",
+    "接入心法：第一天就接，trace 必须带 user/session/version 元数据，否则 A/B 无基线",
+    "trace 是排查（检索锅 vs 生成锅）与明天 Agent 评估的共同数据源"
+  ],
+  "quiz": [
+    {
+      "q": "在 trace/span 模型里，一次 LLM 调用（含 prompt、补全、token 数）对应的是？",
+      "options": ["trace", "generation（span 的一种）", "session", "dashboard"],
+      "answer": 1,
+      "explain": "trace 是整次请求的根；generation 专记 LLM 调用细节，普通 span 记工具/检索等非 LLM 环节。"
+    },
+    {
+      "q": "用户反馈「答错了」，要判断是检索没召回还是生成篡改，最快的办法是？",
+      "options": ["重新训练模型", "打开该请求的 trace，看 retriever span 的输入输出与 writer generation 的内容", "问用户要更多细节", "加更多工具"],
+      "answer": 1,
+      "explain": "trace 把每个环节的原始输入输出都留了底：检索结果里没有相关内容是召回问题，有但答案矛盾是生成问题。"
+    },
+    {
+      "q": "给 trace 挂 version 元数据的核心目的是？",
+      "options": ["界面好看", "不同 prompt/代码版本的效果可对比（A/B 基线）", "加快推理", "符合法律规定"],
+      "answer": 1,
+      "explain": "没有版本维度，改了 prompt 无从判断变好还是变坏；可观测性的「比得了」就靠它。"
+    },
+    {
+      "q": "Langfuse 相对 SaaS 评估平台对公司生产环境的最大卖点是？",
+      "options": ["模型更准", "开源自部署，数据不出内网", "价格便宜一点", "界面更炫"],
+      "answer": 1,
+      "explain": "内部语料、用户对话都属于敏感数据；docker compose 自部署让可观测性与数据合规兼得。"
+    },
+    {
+      "q": "可观测性与 Agent 评估（明天主题）的关系是？",
+      "options": ["互不相关", "trace 库是评估数据源：失败 case 挖掘、离线评估集都从中来", "评估可以完全替代 trace", "两者只能选一个"],
+      "answer": 1,
+      "explain": "先观测积累数据，再基于数据评估与回归——和你训练时先记 loss 曲线再谈调参是同一条流水线。"
+    }
+  ]
+}

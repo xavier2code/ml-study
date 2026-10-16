@@ -1,0 +1,65 @@
+{
+  "day": 88,
+  "title": "Loss 监控 + 异常诊断",
+  "sections": [
+    {
+      "h": "为什么训练监控是「心电图」",
+      "md": "一次几小时甚至几天的训练，你不可能盯着看。**监控就是模型的心电图**：loss、学习率、梯度范数（grad norm）三条曲线，加上周期性的验证 loss 和采样生成。它们告诉你三件事：\n\n- 训练在**收敛**吗（train loss 是否按预期下降）\n- 有没有**过拟合**（val loss 是否拐头向上）\n- 有没有**数值事故**（loss spike、grad norm 爆炸、loss 变 NaN）\n\n生产实践里，大模型一次训练出几十次 loss spike 是常态（GPT-3 论文也坦承如此）。区别在于：**有监控的团队能在 5 分钟内定位原因，没监控的团队只能重跑**。"
+    },
+    {
+      "h": "Loss spike 诊断清单",
+      "md": "看到 loss 突然跳升或变 NaN，按「从廉到贵」的顺序排查：\n\n1. **数据**：有没有一批脏数据（超长序列、乱码、重复样本、全是 padding 的批）？记下 spike 出现的 step，重放那批数据\n2. **学习率**：warmup 是否太短、peak LR 是否过高？LR 过大的典型症状是 loss 早期就震荡上扬\n3. **梯度范数**：grad norm 是否突然放大 10 倍以上？这区分了「梯度爆炸」和「loss 本身算错」\n4. **数值**：fp16 下 loss scaling 是否频繁触发 inf？检查 log 里 skipped step 的频率\n5. **代码/硬件**：最近改了什么？多卡下是否有 NCCL 通信错误、某张卡显存溢出（OOM）\n\n> 快速分诊口诀：**NaN 查数值，spike 查数据，缓慢发散查 LR，随机发散查硬件。**"
+    },
+    {
+      "h": "标准诊断工具链",
+      "md": "监控的最小配置是「每 N 步打一条 log + 一个可视化前端」：\n\n```python\nfor step, batch in enumerate(loader):\n    loss = train_step(model, batch)\n    if step % LOG_EVERY == 0:\n        print(f\"step {step} loss {loss:.4f} \"\n              f\"lr {scheduler.get_last_lr()[0]:.2e} \"\n              f\"grad_norm {grad_norm:.2f}\")\n```\n\n更进一步用 **wandb / TensorBoard** 自动画曲线、设告警。监控指标至少包含：\n\n| 指标 | 健康形态 | 危险信号 |\n|---|---|---|\n| train loss | 平滑下降 | 单步跳升 >2 倍、NaN |\n| val loss | 跟随下降后走平 | 持续高于 train loss 且上升 |\n| grad norm | 稳定在某个量级 | 突然放大一个数量级 |\n| LR 曲线 | 与调度方案一致 | 配置错误导致锯齿 |\n\n另外每隔几百步采样一次生成文本——loss 是平均值，掩盖了「模型在个别 token 上胡说」这类局部退化。"
+    },
+    {
+      "h": "实验：故意训坏再救回来",
+      "md": "今天的核心练习——**主动制造四种事故，再逐个修复**，让诊断清单变成肌肉记忆：\n\n1. **LR 调大 10 倍**：loss 在几百步内发散。救法：回滚到最后一个好 checkpoint，LR 减半重跑；发现得早可临时降低 LR 继续\n2. **关掉 loss scaling 用纯 fp16**：小梯度下溢，loss 停滞或出 NaN。救法：启用 GradScaler 或换 bf16\n3. **注入脏数据**（截断的 JSON、重复 1000 次的同一段文本）：loss 出现尖刺。救法：定位坏 batch、清洗后重放（跳过该批即可，不必全重来）\n4. **梯度裁剪缺失 + 长序列**：grad norm 飙到几百，loss 跟着震荡。救法：`torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)`\n\n每个实验记录：事故的曲线长什么样 → 第几分钟发现 → 采取了什么动作 → 恢复花了多久。这份「事故手册」比任何教程都值钱。"
+    },
+    {
+      "h": "今日串联",
+      "md": "LLM 训练工程师的日常不是写新模型，而是：跑训练 → 看曲线 → 发现异常 → 诊断 → 恢复。RLHF/Agent 时代更甚——奖励信号比 loss 更容易出 spike，监控习惯直接迁移。今天练的四救法（回滚降 LR、修数值、清数据、加裁剪）覆盖了实践中九成的故障。\n\n明日工程化：checkpoint + resume + EMA——让训练「死了也能爬起来继续跑」。"
+    }
+  ],
+  "keyPoints": [
+    "监控三曲线：train loss、val loss、grad norm，外加周期性采样生成",
+    "诊断顺序从廉到贵：数据 → 学习率 → 梯度范数 → 数值（fp16 溢出）→ 代码/硬件",
+    "分诊口诀：NaN 查数值，spike 查数据，缓慢发散查 LR，随机发散查硬件",
+    "梯度爆炸标准救法：clip_grad_norm_ 到 1.0 量级；LR 过大救法：回滚 + 降 LR",
+    "loss spike 后通常只需跳过坏 batch / 回滚 checkpoint，不必从零重训"
+  ],
+  "quiz": [
+    {
+      "q": "训练中 loss 变成 NaN，最应该先检查什么？",
+      "options": ["数据集大小", "数值问题（fp16 溢出、除零、log(0)）", "显卡温度", "batch 里的序列顺序"],
+      "answer": 1,
+      "explain": "NaN 几乎总来自数值事故：fp16 溢出、loss scaling 失效、log/除零等。先查 log 里 skipped step 和 inf 记录。"
+    },
+    {
+      "q": "loss 曲线在某一步突然跳升 3 倍，随后逐步自行恢复。最可能的原因是？",
+      "options": ["学习率调度写错", "一批脏数据（如乱码或异常长序列）", "GPU 烧了", "参数初始化不好"],
+      "answer": 1,
+      "explain": "单点尖刺后自行恢复是脏 batch 的典型形态；LR 问题表现为持续性发散，初始化问题在训练最开始就显现。"
+    },
+    {
+      "q": "grad norm 从 1.0 左右突然涨到 300，loss 开始震荡。最直接的止血手段是？",
+      "options": ["立即停机换 GPU", "梯度裁剪（clip_grad_norm_）", "增大 batch size 到 300 倍", "把层数减半"],
+      "answer": 1,
+      "explain": "梯度裁剪把过大的梯度范数投影回阈值内，是大模型训练的标准护栏，几乎每个 LLM 训练脚本都默认开启 1.0 左右的裁剪。"
+    },
+    {
+      "q": "为什么除了 loss 还要定期采样生成文本？",
+      "options": ["为了让训练变慢一点", "loss 是平均值，会掩盖模型在局部 token 上的退化，生成样本暴露细节问题", "采样能降低 loss", "这是评测集的要求"],
+      "answer": 1,
+      "explain": "平均 loss 对局部崩坏不敏感；定期看生成文本能发现重复、胡话、格式崩坏等 loss 曲线上看不见的问题。"
+    },
+    {
+      "q": "发现某一批数据是脏数据导致 spike 后，正确做法通常是？",
+      "options": ["从零重新训练整个模型", "清洗或跳过该批，用最近的好 checkpoint 继续", "删除验证集", "把学习率调到最大"],
+      "answer": 1,
+      "explain": "单批脏数据的影响有限，spike 后模型往往能部分自愈；回滚到最后一个好 checkpoint 并跳过坏批即可，从零重训代价过大。"
+    }
+  ]
+}

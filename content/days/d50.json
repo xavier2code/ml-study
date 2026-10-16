@@ -1,0 +1,71 @@
+{
+  "day": 50,
+  "title": "CNN 基础：卷积 + 池化",
+  "sections": [
+    {
+      "h": "卷积的直觉：模板扫描",
+      "md": "看 3Blue1Brown 的卷积视频后用自己的话复述：卷积 = **拿一个小模板（kernel）在图上滑动，每个位置算一次匹配得分**。kernel（如 3×3）编码一种局部模式——边缘、色块、纹理。\n\n为什么全连接层不适合图像：一张 32×32×3 的图展平后是 3072 维，一层 1000 神经元就是 300 万参数。更糟的是，全连接对**平移**毫无概念——猫挪三个像素，权重就全对不上。\n\n卷积的两个先验恰好匹配视觉：\n\n- **局部性**：邻近像素才相关，kernel 只看邻域\n- **平移等变**：同一个 kernel 扫全图，猫在哪都能被同一组权重发现\n\n> LLM 关联：Transformer 的 attention 是全局的，但 patch embedding、滑动窗口局部 attention 都在重新引入「局部性」省算力。"
+    },
+    {
+      "h": "机制：手动算一个 3×3 卷积",
+      "md": "拿纸笔算一遍（核心练习）。输入 5×5，kernel 3×3：\n\n```\n输入 X（5×5）        kernel K\n1 2 3 0 1            1 0 -1\n4 5 6 1 0            1 0 -1\n7 8 9 2 1            1 0 -1\n0 1 2 3 4\n5 6 7 8 9\n```\n\n输出（5-3+1）= 3×3。第一个元素 = kernel 与左上 3×3 子块**对应相乘再求和**：\n\n```\n(1×1+2×0+3×(-1)) + (4×1+5×0+6×(-1)) + (7×1+8×0+9×(-1))\n= (1-3) + (4-6) + (7-9) = -6\n```\n\nkernel 每次滑动 1 格（stride=1）扫完输出。**边缘检测**就是这个 kernel：左右两侧相减，平坦区域得 0，竖直边缘得大值。\n\n关键公式：`out = (H - K + 2P)/S + 1`（H 输入尺寸、K kernel、P padding、S stride）。想让输出尺寸不变，用 P = (K-1)/2 = 1。\n\n**多通道**：输入 3 通道时 kernel 也是 3×3×3，各通道分别乘加后求和；输出通道数 = kernel 个数，每个 kernel 学一种模式。"
+    },
+    {
+      "h": "池化：缩小地图，保留要点",
+      "md": "**最大池化**（2×2, stride 2）把每个 2×2 区域压缩成其中的最大值——「这个模式出现在这附近吗」。作用：\n\n- 尺寸减半，计算量减半\n- 感受野逐层扩大：几次池化后，深层一个位置「看到」原图几十个像素\n- 小幅平移不变性：模式在 2×2 内挪动，max 不变\n\n现代趋势：池化被 **stride=2 卷积**（可学习地下采样）替代；末端常用 Global Average Pooling（每通道取平均，输出固定长度向量）代替大力展平。"
+    },
+    {
+      "h": "PyTorch nn.Conv2d 实战",
+      "md": "上手验证今天的手算：\n\n```python\nimport torch, torch.nn as nn, torch.nn.functional as F\n\nconv = nn.Conv2d(in_channels=1, out_channels=1, kernel_size=3,\n                 stride=1, padding=0, bias=False)\nwith torch.no_grad():\n    conv.weight.copy_(torch.tensor([[[[1.,0.,-1.],[1.,0.,-1.],[1.,0.,-1.]]]]))\nx = torch.tensor([[[[1.,2.,3.,0.,1.],[4.,5.,6.,1.,0.],[7.,8.,9.,2.,1.],\n                    [0.,1.,2.,3.,4.],[5.,6.,7.,8.,9.]]]])\nprint(conv(x))   # 左上角应为 -6，与手算一致\n```\n\n核对三件事：输出形状 `(1,1,3,3)`；数值与手算一致；`conv.weight.shape = (out_ch, in_ch, kH, kW)`。\n\n拼一个最小 CNN（明天的基础块）：\n\n```python\nclass MiniCNN(nn.Module):\n    def __init__(self):\n        super().__init__()\n        self.net = nn.Sequential(\n            nn.Conv2d(3, 32, 3, padding=1), nn.BatchNorm2d(32), nn.ReLU(),\n            nn.MaxPool2d(2),                          # 32×32 → 16×16\n            nn.Conv2d(32, 64, 3, padding=1), nn.BatchNorm2d(64), nn.ReLU(),\n            nn.MaxPool2d(2),                          # → 8×8\n            nn.AdaptiveAvgPool2d(1), nn.Flatten(),\n            nn.Linear(64, 10))\n    def forward(self, x): return self.net(x)\n```\n\n数参数：3×3×3×32 + 32×64×3×3 + 64×10 ≈ **4.2 万**，是同宽度全连接的百分之一量级——权值共享的威力。"
+    },
+    {
+      "h": "今日串联",
+      "md": "**卷积** = 局部模板滑窗打分，**池化** = 压缩空间、扩大感受野；手算建立手感，nn.Conv2d 验证。Conv-BN-ReLU 三件套是后续视觉网络的标准砖块。\n\n明日预告：把砖块垒成大厦——LeNet → AlexNet → VGG 的架构演进，以及 AlexNet 在 CIFAR-10 的实现。"
+    }
+  ],
+  "keyPoints": [
+    "卷积 = 模板滑窗匹配：kernel 编码局部模式，对应相乘求和得输出",
+    "输出尺寸公式 out = (H - K + 2P)/S + 1；padding=1 保持 3×3 kernel 的尺寸不变",
+    "输出通道数 = kernel 个数；kernel 形状 (out_ch, in_ch, kH, kW)",
+    "最大池化下采样 + 扩大感受野 + 小幅平移不变；现代网络常用 stride=2 卷积或 GAP 替代",
+    "权值共享使参数量比全连接少几个数量级：32 通道两层 CNN 约 4 万参数"
+  ],
+  "quiz": [
+    {
+      "q": "输入 32×32，kernel 5×5，padding=2，stride=1，输出尺寸是？",
+      "options": ["32×32", "30×30", "28×28", "34×34"],
+      "answer": 0,
+      "explain": "out = (32-5+2×2)/1 + 1 = 32。P=(K-1)/2=2 恰好让 5×5 kernel 保持尺寸不变。"
+    },
+    {
+      "q": "3×3 的 kernel [[1,0,-1],[1,0,-1],[1,0,-1]] 检测什么？",
+      "options": ["水平边缘", "垂直边缘", "模糊", "锐化"],
+      "answer": 1,
+      "explain": "左列减右列（左右对称差分），左右强度突变处（垂直走向的边缘）响应最大；平坦区域相互抵消为 0。"
+    },
+    {
+      "q": "nn.Conv2d(16, 32, kernel_size=3) 的权重张量形状是？",
+      "options": ["(3, 3, 16, 32)", "(32, 16, 3, 3)", "(16, 32, 3, 3)", "(32, 3, 3)"],
+      "answer": 1,
+      "explain": "PyTorch 卷积权重形状是 (out_channels, in_channels, kH, kW)：32 个输出通道、每个是 16×3×3 的 kernel。"
+    },
+    {
+      "q": "「深层一个位置能看到原图更大范围」主要靠什么机制累积？",
+      "options": ["学习率调度", "池化/下采样逐层扩大感受野", "dropout", "weight decay"],
+      "answer": 1,
+      "explain": "每下采样一次，同样的 3×3 kernel 对应原图的更大邻域；感受野随层数与下采样指数增长，深层因此能编码整图级语义。"
+    },
+    {
+      "q": "相比全连接，卷积参数少几个数量级的根本原因是？",
+      "options": ["用了 float16", "同一个 kernel 扫全图（权值共享）且只看局部", "kernel 数量少", "池化丢掉了信息"],
+      "answer": 1,
+      "explain": "局部连接 + 权值共享：一个 3×3×3 kernel 只有 27 个权重却覆盖整图，参数量与输入分辨率无关。"
+    },
+    {
+      "q": "现代分类网络末端常用 Global Average Pooling 代替展平，好处是？",
+      "options": ["提高学习率", "输出维度与输入分辨率解耦，且无额外参数", "自动做数据增强", "防止标签泄漏"],
+      "answer": 1,
+      "explain": "每通道取平均得到固定长度向量：不管输入 32×32 还是 224×224 都能接同一分类头，且比「展平+大 Linear」少海量参数、更不易过拟合。"
+    }
+  ]
+}

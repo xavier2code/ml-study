@@ -1,0 +1,71 @@
+{
+  "day": 93,
+  "title": "生成质量评估（perplexity + 人工）",
+  "sections": [
+    {
+      "h": "为什么 loss 还不够",
+      "md": "训练 loss 只告诉你「模型对训练分布拟合得如何」，但用户真正关心的是**生成的故事好不好**。两者的错位很常见：\n\n- loss 是**教师强制**下的逐 token 平均——生成是自回归的，早期一个错 token 会把后续全部带偏（exposure bias）\n- loss 压平的是平均误差，掩盖「偶发胡话」；而一个角色名前后矛盾就能毁掉整篇故事\n- 换 tokenizer 后 loss 之间不可比——token 数不同，每个 token 的难度也不同\n\n所以标准做法是两条腿走路：**自动指标（perplexity）管「统计意义上的流利」，人工评估管「体验意义上的好」**。前者便宜可重复，后者贵但真实。"
+    },
+    {
+      "h": "Perplexity：模型的「有效选项数」",
+      "md": "直觉：perplexity = 模型每一步「真正犹豫于几个词之间」。它就是交叉熵损失的指数：\n\n```\nPPL = exp(平均 cross-entropy loss)\n```\n\n- PPL = 1：完美预测，毫不意外\n- PPL = 50：相当于在 50 个词里均匀随机猜（困惑）\n- 随机初始化模型在英文上 PPL ≈ 词表大小（如 ≈50257）\n\n两个必须注意的细节：\n\n1. **只能在同一 tokenizer 内比较 PPL**，跨 tokenizer 的 PPL 没有意义\n2. 评估要**滑动窗口**或正确处理最后不足一个窗口的尾巴，否则边角 token 拉偏平均\n\nGPT-3 在 Penn Treebank 上 PPL ≈ 20.5， TinyStories 上的 50M 模型落在 5–8 就很不错。"
+    },
+    {
+      "h": "动手：perplexity 评估脚本",
+      "md": "核心逻辑（注意用 eval 和 no_grad，逐段滑窗累加）：\n\n```python\n@torch.no_grad()\ndef perplexity(model, ids, block=256):\n    model.eval()\n    nll, n = 0.0, 0\n    for i in range(0, len(ids) - 1, block):\n        x = ids[i : i + block].unsqueeze(0)\n        y = ids[i + 1 : i + block + 1].unsqueeze(0)\n        logits = model(x)\n        nll += F.cross_entropy(logits.view(-1, V), y.view(-1),\n                              reduction=\"sum\").item()\n        n += y.numel()\n    return math.exp(nll / n)\n```\n\n工程要点：\n\n- 评估集**绝不能**出现在训练数据里（数据泄漏会让 PPL 好看得毫无意义）\n- 固定同一份验证集 + 同一 tokenizer，做成 `eval.py data.jsonl --ckpt best.pt`，每次实验一条命令出数\n- 记录 PPL 时连 checkpoint、数据版本一起记——孤立的 1.88 毫无价值"
+    },
+    {
+      "h": "人工评估 50 个样本：把主观变成流程",
+      "md": "人工评估最大的敌人是「随手看看」。流程化（LLM 时代的标准做法之一是 pairwise 比较打 ELO，今天先做打分制）：\n\n1. **固定采样协议**：温度 0.8、top-k 50、同一个 prompt 集（50 个开头，覆盖不同角色/场景），每 prompt 生成 1 条\n2. **盲评**：文件名只留 hash，不知道哪条来自哪个模型/哪个 step\n3. **维度打分**（每项 1–5 分）：语法通顺、情节连贯、角色一致、无重复循环、符合 TinyStories 文风\n4. **记录极端案例**：最好的和最差的样本单独存档——它们比均分更有信息量\n\n典型发现：PPL 5.6 与 5.9 的两个模型人工分可能几乎相同；而一个 PPL 只差 0.3 但频繁陷入「she said 循环」的模型，人工分断崖式下跌。**PPL 是必要条件，不是充分条件**。\n\n> 打分前后各看一遍评分标准，人也会「越评越松」——定时用同一条锚样本校准自己。"
+    },
+    {
+      "h": "今日串联",
+      "md": "你现在拥有完整的评估闭环：**PPL 脚本（一条命令、可重复）+ 人工评估流程（盲评、分维度、有锚点）**。这套方法论直接迁移到 LLM/Agent 时代：benchmark 分数之于聊天模型正如 PPL 之于 mini-GPT——便宜、可比较、但不等于体验；人工盲评之于 RLHF 正如你今天的 50 样本打分。后天进入本周收官：Scaling Law，回答「多大的模型配多少数据最划算」。"
+    }
+  ],
+  "keyPoints": [
+    "loss/PPL 是教师强制的平均误差，与自回归生成质量存在系统性错位",
+    "PPL = exp(平均交叉熵)，含义是模型每步的有效候选词数；只能在同一 tokenizer 内比较",
+    "评估必须留出干净验证集，数据泄漏会让 PPL 虚低到毫无意义",
+    "人工评估流程化：固定采样协议 + 盲评 + 分维度打分 + 锚样本校准",
+    "PPL 是必要条件不是充分条件：循环、矛盾等生成病在 PPL 上可能看不见"
+  ],
+  "quiz": [
+    {
+      "q": "模型在某验证集上 cross-entropy loss 平均为 2.0，perplexity 是多少？",
+      "options": ["2.0", "e² ≈ 7.39", "0.5", "无法计算"],
+      "answer": 1,
+      "explain": "PPL = exp(loss) = exp(2.0) ≈ 7.39，即模型每一步平均在约 7 个词之间犹豫。"
+    },
+    {
+      "q": "模型 A（vocab 32k）PPL=10，模型 B（vocab 50k）PPL=12。能否断定 A 的语言能力更强？",
+      "options": ["能，PPL 越小越好", "不能，不同 tokenizer/词表下的 PPL 不可直接比较", "能，因为 32k 词表更小", "不能，因为 PPL 与词表无关"],
+      "answer": 1,
+      "explain": "PPL 依赖 token 的粒度：词表越大每个 token 越小、信息越少，数值天然偏低；跨 tokenizer 比较 PPL 没有意义。"
+    },
+    {
+      "q": "评估时不小心把训练数据混进了验证集，后果是？",
+      "options": ["PPL 虚低，模型看似很好实则泛化未知", "PPL 虚高", "没有影响", "训练会发散"],
+      "answer": 0,
+      "explain": "模型见过这些文本，等于开卷考试，PPL 被系统性低估——这是评估中最常见也最隐蔽的错误。"
+    },
+    {
+      "q": "人工评估采用「盲评 + hash 文件名」的目的是？",
+      "options": ["节省存储", "消除对特定模型/来源的先入为主的偏爱，让分数只反映文本质量", "加快生成速度", "为了兼容命令行工具"],
+      "answer": 1,
+      "explain": "知道「这是 GPT-4 生成的」会显著影响评分（光环效应）；盲评把主观评估里最可控的偏差去掉。"
+    },
+    {
+      "q": "两个模型 PPL 几乎相同（5.6 vs 5.9），但人工评分差异巨大。最合理的解释是？",
+      "options": ["人工评分不可信，应以 PPL 为准", "PPL 是平均误差，对循环、前后矛盾这类局部生成病不敏感", "两个模型其实一样", "温度设置错了"],
+      "answer": 1,
+      "explain": "陷入重复循环只拉高局部几个 token 的 loss，平均后被抹平；这正是「PPL 必要而不充分」、需要人工评估补位的原因。"
+    },
+    {
+      "q": "perplexity 评估脚本中必须包含的操作是？",
+      "options": ["model.train()", "torch.no_grad() + model.eval()，并正确滑窗统计 token 数", "梯度裁剪", "数据增强"],
+      "answer": 1,
+      "explain": "评估不需要梯度（省显存防泄漏），且必须让 dropout 等训练期行为关闭；滑窗与精确计数保证平均正确。"
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "day": 123,
+  "title": "Sparse Attention (BigBird / Longformer)",
+  "sections": [
+    {
+      "h": "另一条路：让注意力变稀",
+      "md": "RoPE scaling 是「让长位置落回训练范围」；稀疏注意力走的是另一条路：**别让每个 token 都看所有人**。\n\n标准 attention 是 O(N²)：N=4096 时每层每头要算 1600 万个注意力分数，而其中大部分分数接近零——注意力矩阵天然是**稀疏**的，少数关键连接承担了绝大部分信息流动。稀疏注意力的赌注：只算那些关键的连接，把 O(N²) 降到 O(N·w)（w 为窗口大小）。\n\n成败关键在「稀疏的方式」：如果连接模式不规则（每个 token 随机挑邻居），GPU 的稠密矩阵乘完全用不上；**结构化稀疏**（模式规则、可写成块矩阵运算）才能兑现加速。BigBird/Longformer 的设计都围绕这一点。"
+    },
+    {
+      "h": "三种注意力成分",
+      "md": "BigBird 论文把稀疏模式拆成三种成分的组合：\n\n1. **sliding window（滑窗）**：每个 token 只看左右各 w 个邻居（w=512 量级）——局部语法、短语级信息的通道\n2. **global tokens（全局 token）**：少数特殊位置（如 [CLS]、问题中的词）与所有 token 互看——信息在全局长程流动的高速公路\n3. **random（随机连接）**：随机加少量长程边——打散信息、统计上保证任何两 token 之间都有通路\n\n三者的组合有漂亮的理论背书（BigBird 论文）：global + window + random 的图是 **Turing 完备**的，也是序列到序列函数的**通用近似器**——即这种稀疏不是权宜之计，表达能力有保障。直觉：滑窗管细节、global 管骨架、random 防信息孤岛。"
+    },
+    {
+      "h": "Longformer vs BigBird",
+      "md": "两篇工作几乎同期（2020），思路同源、细节分岔：\n\n| | Longformer | BigBird |\n|---|---|---|\n| 滑窗 | **dilated** 空洞窗口，层越深感受野越大 | 固定窗口 |\n| 全局 | 少量任务相关 token 开 global（如问答的问题词） | [CLS] 等固定位置 |\n| 随机边 | 无 | 有（理论构造需要） |\n| 长文档任务 | QA/分类见长 | 分类/生成见长 |\n\n两者当时都把可处理长度推到 4K–32K，在长文档任务上大幅超过 RoBERTa/BERT 的截断基线。共同的工程实现：注意力矩阵写成 **block-sparse** 块状结构，稠密块内用普通 GEMM，整体计算量随 N 线性增长——这就是「结构化稀疏」落地的样子。"
+    },
+    {
+      "h": "PyTorch 实现 Longformer global attention",
+      "md": "教学版实现：构造布尔掩码，global 行全 True，其余只开窗口：\n\n```python\nimport torch, torch.nn.functional as F\n\ndef sparse_mask(n, w=2, global_ids=(0,)):  # n=序列长, w=单侧窗口\n    ids = torch.arange(n)\n    m = (ids[:, None] - ids[None, :]).abs() <= w   # 滑窗\n    m[global_ids] = True                            # global 行全开\n    m[:, global_ids] = True                         # global 列也全开\n    return m                                        # (n, n) bool\n\nscores = q @ k.transpose(-1, -2) / (d ** 0.5)\nscores = scores.masked_fill(~mask, float(\"-inf\"))\nattn = F.softmax(scores, dim=-1) @ v\n```\n\n代码五行，但要清醒：**这份实现没有加速**——它仍算满了 N×N 再掩码。真实收益需要 block-sparse kernel（只算非零块），这正是 BigBird 用 blocksparse 库、vLLM 用 CUDA kernel 的原因：稀疏的收益永远在 kernel 层兑现，掩码只是语义层。"
+    },
+    {
+      "h": "为什么它们退居二线",
+      "md": "今天长上下文的主流是 FlashAttention + RoPE scaling + 长数据重训，稀疏注意力退到特定场景，原因值得咀嚼：\n\n- **FlashAttention 把 full attention 的常数压得太低**：几十 K 以内 full attention 已经够快，稀疏版实现复杂、kernel 难写，性价比反转\n- **稀疏模式是人工预设的**：滑窗+global 的先验并非对所有任务最优（代码、检索需要的不规则长程依赖会被砍掉）\n- **收益要到 100K+ 才显现**，而那个量级如今更常用「检索 + 压缩历史」（RAG、memory）来绕过\n\n但思想没有死：现代混合架构（局部注意力 + 线性注意力/SSM 的全局层）本质是「结构化稀疏」的复活。对 Agent 的启示：**上下文不是塞得越多越好**——滑窗保留最近对话、global 保留任务目标、其余摘要归档，这正是稀疏注意力思想在系统设计层的投影。\n\n明日预告：Mamba/SSM——干脆用固定大小的状态替代整个 KV cache。"
+    }
+  ],
+  "keyPoints": [
+    "稀疏注意力：只算关键连接，O(N²) → O(N·w)，成败在结构化（可块矩阵运算）而非随机乱稀",
+    "三种成分：滑窗（局部细节）、global tokens（长程骨架）、random（防信息孤岛）",
+    "BigBird 理论：global+window+random 图 Turing 完备且是通用近似器",
+    "Longformer 特点：dilated 空洞滑窗（深层感受野更大）+ 任务相关 token 开 global",
+    "掩码实现只是语义层，真实加速必须靠 block-sparse kernel",
+    "退居二线原因：FlashAttention 压低了 full attention 成本、预设模式非最优、收益要到 100K+ 才显现"
+  ],
+  "quiz": [
+    {
+      "q": "稀疏注意力「结构化」为什么是成败关键？",
+      "options": ["结构化更美观", "只有规则的连接模式才能写成块矩阵、吃到 GPU 稠密 GEMM 的红利，随机乱稀反而更慢", "结构化精度更高", "结构化省参数"],
+      "answer": 1,
+      "explain": "GPU 加速来自规则块状计算；不规则稀疏的索引开销可能超过省下的计算量，这正是必须 block-sparse 化的原因。"
+    },
+    {
+      "q": "global tokens 在 BigBird/Longformer 中的作用是？",
+      "options": ["装饰作用", "与所有 token 互看，充当信息长程流动的高速公路（如 [CLS]、问题词）", "只看自己", "加速 softmax"],
+      "answer": 1,
+      "explain": "滑窗只能传局部信息，global 位置是唯一能让相距很远的 token 交换信息的通道，任务关键 token 开 global 是设计精髓。"
+    },
+    {
+      "q": "Longformer 相对 BigBird 的特色设计是？",
+      "options": ["dilated 空洞滑窗，层数越深感受野越大", "不要滑窗", "没有全局 token", "完全稠密"],
+      "answer": 0,
+      "explain": "空洞窗口让浅层管细节、深层自然获得大感受野，用层级化的方式替代随机边来覆盖长程。"
+    },
+    {
+      "q": "本日教学版掩码实现（先算满 N×N 再 masked_fill）为什么不快？",
+      "options": ["掩码写错了", "它仍然算完了整个 N×N 矩阵，稀疏的收益必须由 block-sparse kernel（只算非零块）兑现", "softmax 太慢", "内存不足"],
+      "answer": 1,
+      "explain": "掩码只改变语义（哪些位置可见），不减计算量；真实加速在 kernel 层——跳过零块的计算与访存。"
+    },
+    {
+      "q": "稀疏注意力如今退居二线的最主要原因？",
+      "options": ["理论错误", "FlashAttention 把 full attention 成本压得太低，几十 K 内稀疏的复杂实现性价比反转", "没人懂怎么实现", "显存不支持"],
+      "answer": 1,
+      "explain": "工程收益取决于与替代方案对比：full attention 变便宜后，只有 100K+ 场景稀疏才划算，而那种场景常被 RAG/压缩绕过。"
+    },
+    {
+      "q": "稀疏注意力思想对 Agent 上下文管理的启示是？",
+      "options": ["上下文越长越好", "滑窗留最近对话、global 留任务目标、其余摘要归档——选择性保留信息而非全量堆上下文", "全部历史都要保留", "每次清空上下文"],
+      "answer": 1,
+      "explain": "「不是每个 token 都需要看所有历史」的稀疏先验，映射到系统层就是分层记忆：近期细节 + 目标全局 + 压缩归档。"
+    }
+  ]
+}

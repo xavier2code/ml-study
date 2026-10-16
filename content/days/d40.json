@@ -1,0 +1,65 @@
+{
+  "day": 40,
+  "title": "学习率调度 + 初始化",
+  "sections": [
+    {
+      "h": "学习率：训练中最重要的超参数",
+      "md": "昨天说过优化器怎么走，今天回答两个更根本的问题：**步子迈多大**（学习率）和**从哪里出发**（初始化）。炼丹圈的经验：调学习率的收益常常大于换模型。\n\n为什么固定学习率不行？直觉：\n\n- 训练初期参数随机，梯度噪、方向乱——步子大了直接发散\n- 训练后期接近谷底——步子大了在谷底两侧横跳，loss 下不去\n\n所以**大方向：先大后小**。但「怎么变小」大有讲究，这就是调度（schedule）。"
+    },
+    {
+      "h": "三大调度：warmup / cosine / step",
+      "md": "**Step decay（阶梯式）**：每 N 个 epoch 学习率乘 0.1。简单粗暴，ResNet 论文用它，配合 SGD 时代的直觉——loss 平了就退一档。\n\n**Cosine annealing（余弦退火）**：从 η_max 平滑滑到接近 0：\n\n```\nη(t) = η_min + ½(η_max − η_min)·(1 + cos(πt/T))\n```\n\n前半段降得慢（探索），后半段降得快（精修），无需挑退火时机，成了现代默认。\n\n**Warmup（预热）**：前几千步从 0（或极小值）线性升到 η_max 再进入 decay。为什么开头反而要小？——大模型初期梯度方差极大，Adam 的二阶矩 v 还没统计准，大步 + 坏方向 = 灾难。warmup 给统计量「热身」时间。\n\n> 现代 LLM 标配 = **linear warmup + cosine decay**。nanoGPT 里两行代码，GPT-3 论文里一张关键超参表。"
+    },
+    {
+      "h": "初始化：出发点的力学",
+      "md": "反向传播中梯度要**逐层相乘**。初始化决定了初始时每层输出的量级——量级错了，梯度会逐层爆炸或消失。\n\n- **全零**：所有神经元对称——同收同发同梯度，永远互为副本，网络退化成一根线。大忌\n- **太大（如 std=10）**：激活值逐层放大，几层后溢出，梯度 NaN\n- **太小（如 std=0.001）**：激活逐层衰减到 0，深层收不到梯度\n\n**Xavier**（2010）：为 sigmoid/tanh 设计，令每层输出方差 ≈ 输入方差：\n\n```\nW ~ N(0, 1/fan_in)   # 或均匀分布 U(±√(6/(fan_in+fan_out)))\n```\n\n**Kaiming/He**（2015）：ReLU 会砍掉一半激活（乘 ½ 期望），Xavier 方差不够，修正为 var = 2/fan_in。**用 ReLU 就配 Kaiming**，一条硬规则。\n\n```python\nnn.init.kaiming_normal_(layer.weight, nonlinearity='relu')\n```\n\n> 注意：BatchNorm/LayerNorm（Day 46）会不断重置激活量级，弱化了初始化的敏感性——但 LLM 前期不稳多半还得回头查这里。"
+    },
+    {
+      "h": "实验：MLP on MNIST 对比调度",
+      "md": "1 小时实验，代码骨架（同一模型、同一 Adam，只换调度）：\n\n```python\nschedulers = {\n  'fixed':  None,\n  'step':   torch.optim.lr_scheduler.StepLR(opt, 30, 0.1),\n  'cosine': torch.optim.lr_scheduler.CosineAnnealingLR(opt, 100),\n}\nfor name, sch in schedulers.items():\n    for epoch in range(100):\n        train_one_epoch()\n        sch.step()          # 固定 lr 时跳过\n```\n\n预期观察（自己跑一遍才有体感）：\n\n| 调度 | 曲线形态 |\n|---|---|\n| fixed 1e-3 | 前快后平台，test acc 卡住 |\n| step | 每个 30 epoch 出现一次下台阶 |\n| cosine | 平滑下降，末段通常最好 |\n\n再补一组对照：Kaiming vs std=0.01 初始化，看前几个 epoch 的 loss 起点差多少。"
+    },
+    {
+      "h": "今日串联 + LLM 关联",
+      "md": "今天两件事互为表里：**初始化决定起点处的梯度量级，调度决定全程的步长节奏**。都要服务于同一个目标——让反向传播的信号在几十上百层里稳定流动。\n\n**LLM 关联**：GPT-3 用 2000 步线性 warmup 后 cosine 到 10%；Llama 系列同样 warmup+cosine。更深的一层：**μP（maximal update parametrization）**研究发现调好小模型的 LR 可以直接迁移到大模型——学习率不只是超参，还是连接不同规模模型的桥梁。初始化方面，GPT-2 的残差层加 0.02 的缩放、Llama 用 1/√(2·depth) 缩放深度，都是今天 Xavier/Kaiming 思想的直系后代。"
+    }
+  ],
+  "keyPoints": [
+    "固定学习率两头不讨好：初期易发散、后期易震荡，主流是「先大后小」",
+    "Cosine：η(t) = η_min + ½(η_max−η_min)(1+cos(πt/T))，平滑、无需挑时机，现代默认",
+    "Warmup 解决大模型初期梯度方差大、Adam 统计量未热身的问题；LLM 标配 warmup+cosine",
+    "全零初始化导致神经元对称性无法打破；太大爆炸、太小消失",
+    "Xavier 配 sigmoid/tanh（1/fan_in），Kaiming 配 ReLU（2/fan_in），硬规则"
+  ],
+  "quiz": [
+    {
+      "q": "为什么 LLM 训练普遍要 warmup？",
+      "options": ["省显存", "初期梯度方差大且 Adam 的 v 未统计准，小步热身更稳", "让数据加载更快", "提高学习率上限没有意义"],
+      "answer": 1,
+      "explain": "开局统计量（如 Adam 二阶矩）还不准、梯度噪声大，大学习率容易把参数推向坏区域；warmup 给统计热身，之后才放大步子。"
+    },
+    {
+      "q": "全零初始化的主要问题是？",
+      "options": ["计算太慢", "所有神经元对称：前向输出相同、梯度相同，永远学成同一个特征", "显存占用大", "与 BatchNorm 不兼容"],
+      "answer": 1,
+      "explain": "对称性不被打破，隐藏单元再多人手一份相同的功能，网络等效于单神经元——所以必须随机初始化。"
+    },
+    {
+      "q": "网络激活函数全是 ReLU，应该用哪种初始化？",
+      "options": ["Xavier", "Kaiming/He，方差 2/fan_in", "全零也行", "std=10 的正态分布"],
+      "answer": 1,
+      "explain": "ReLU 掉一半激活，为保持方差稳定需把方差翻倍：var = 2/fan_in，即 Kaiming 初始化。"
+    },
+    {
+      "q": "StepLR(step_size=30, gamma=0.1) 在第 60 个 epoch 结束后学习率是初始的多少？",
+      "options": ["0.1 倍", "0.01 倍", "0.5 倍", "不变"],
+      "answer": 1,
+      "explain": "每 30 个 epoch 乘 0.1：第 30 个 epoch 后 0.1 倍，第 60 个后再乘 0.1 得 0.01 倍。"
+    },
+    {
+      "q": "初始化 std 取 10，训练几十步后 loss 变成 NaN，最可能的原因是？",
+      "options": ["学习率太小", "激活/梯度逐层放大溢出，反向传播数值爆炸", "数据没 shuffle", "Adam 的 β₂ 设错"],
+      "answer": 1,
+      "explain": "过大的初始权重让每层输出方差逐层放大，前向数值溢出、反向梯度爆炸，很快就 NaN——这是「初始化决定梯度量级」的直接演示。"
+    }
+  ]
+}

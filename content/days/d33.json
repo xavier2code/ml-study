@@ -1,0 +1,101 @@
+{
+  "day": 33,
+  "title": "训练 on MNIST",
+  "sections": [
+    {
+      "h": "MNIST：深度学习的 hello world",
+      "md": "28×28 灰度手写数字、6 万训练 + 1 万测试、10 类——MNIST 从 1998 年服役至今，是深度学习者的第一场实战。今天目标明确可测：**用昨天的 MLP 在测试集拿到 ≥97% 准确率**。\n\n为什么值得认真打：昨天是「零件级」理解，今天加上**真实数据管道**才成完整闭环；97% 逼你第一次**调参**——每个旋钮真实影响结果；看到模型把 4 认成 9、7 认成 1，「泛化」变成具体图片。\n\n预期参照：逻辑回归 ≈92%，小 MLP 97–98%，CNN 99%+。拿到 97% = 跑赢全部传统基线——**深度第一次展示价值**。"
+    },
+    {
+      "h": "数据管道：datasets + DataLoader",
+      "md": "`torchvision` 三件套：**下载 → 变换 → 装载**：\n\n```python\nfrom torch.utils.data import DataLoader\nfrom torchvision import datasets, transforms\n\ntransform = transforms.Compose([\n    transforms.ToTensor(),              # 像素压到 [0,1]\n    transforms.Normalize((0.1307,), (0.3081,))  # 全局均值/方差\n])\n\ntrain_ds = datasets.MNIST(\"data\", train=True, download=True, transform=transform)\ntest_ds = datasets.MNIST(\"data\", train=False, transform=transform)\n\ntrain_loader = DataLoader(train_ds, batch_size=64, shuffle=True)\ntest_loader = DataLoader(test_ds, batch_size=1000)\n```\n\n四个要点：①**归一化**让损失面更圆、梯度更稳；②**shuffle=True 只给训练集**，避免记住批次顺序；③**batch_size=64** 是经验起点，太小噪声大且慢，太大压显存；④模型沿用昨天的 MLP，`reshape(-1, 784)` 展平对接。"
+    },
+    {
+      "h": "训练与评估：两个循环各司其职",
+      "md": "训练循环 = Day 32 五步外套一层 epoch，新知识是**评估循环**——先看函数再套循环：\n\n```python\ndef evaluate(model, loader):\n    model.eval(); correct = total = 0\n    with torch.no_grad():\n        for x, y in loader:\n            correct += (model(x).argmax(1) == y).sum().item()\n            total += y.numel()\n    return correct / total\n\nfor epoch in range(10):\n    model.train()\n    for x, y in train_loader:\n        loss = criterion(model(x), y)\n        optimizer.zero_grad(); loss.backward(); optimizer.step()\n    print(epoch, evaluate(model, test_loader))\n```\n\n三纪律：①`eval()`/`train()` 成对（今天无 dropout/BN，但是终身习惯）；②评估在 `no_grad()` 里；③`argmax(dim=1)` 后比对。\n\n**调参路线图**：Adam + lr=1e-3 + 10 epoch 通常直接 97.5%+。只有 95%？先查归一化与 lr，再加深加宽。训练好测试差？减 epoch 或加 dropout。**每次只动一个旋钮，结果记 MLflow**。"
+    },
+    {
+      "h": "wandb 接入：给训练装仪表盘",
+      "md": "**wandb 专为深度学习训练过程而生**——画每一步 loss 曲线（MLflow 管表格实验，二者分工）。接入五步：\n\n```bash\npip install wandb\nwandb login        # 注册后粘贴 API key，一次即可\n```\n\n```python\nimport wandb\n\nwandb.init(project=\"mnist-mlp\", config={\n    \"lr\": 1e-3, \"batch_size\": 64, \"epochs\": 10,\n})\n\n# 训练循环内，每个 epoch 结束时：\nwandb.log({\"loss\": loss.item(), \"test_acc\": acc})\nwandb.finish()\n```\n\n为什么看曲线：loss 下降后平台 → lr 合适；震荡不收敛 → lr 太大；训练降/测试停 → 过拟合（曲线张口）；test_acc 中途见顶 → 该早停。`config` 自动记超参，多组 lr 曲线叠加对比——GPT 训练监控同构。断网可用 `mode=\"offline\"`。"
+    },
+    {
+      "h": "今日串联 + Phase 2 展望",
+      "md": "完整闭环：**数据管道** → **模型**（昨天 MLP 复用）→ **训练/评估双循环** → **监控**（wandb 曲线）。你从「会用模型」进化为「会训模型」。\n\n达标检查：test acc ≥97%、wandb 有完整曲线、超参可追溯。没到就按路线图排查——**第一次把分数从 92% 磨到 97% 的过程比结果值钱十倍**。\n\nPhase 2 前路：CNN → RNN/序列 → Transformer 与 nanoGPT。但今天的骨架——**数据装载、五步循环、评估纪律、曲线监控**——在 GPT 训练里一个字不变，变的只是模型内部和 batch。你已经在写「缩小版的大模型训练脚本」。"
+    }
+  ],
+  "keyPoints": [
+    "torchvision 三件套：datasets 下载、transforms 归一化（MNIST 均值 0.1307/方差 0.3081）、DataLoader 分批",
+    "shuffle=True 只用于训练集；batch_size=64 是经验起点",
+    "评估三纪律：model.eval() 成对、torch.no_grad() 包裹、argmax(dim=1) 后比对",
+    "曲线即诊断：loss 震荡=lr 过大，训练降/测试停=过拟合，test_acc 中途见顶=该早停",
+    "wandb.init 的 config 记录超参，run 对比页把调参从盲试变成看图作业"
+  ],
+  "quiz": [
+    {
+      "q": "MNIST 数据管道中 `transforms.Normalize((0.1307,), (0.3081,))` 的作用是？",
+      "options": [
+        "把图片 resize 到固定大小",
+        "用全局均值方差标准化，使输入分布中心化，训练更稳",
+        "数据增强（随机旋转）",
+        "把标签转成 one-hot"
+      ],
+      "answer": 1,
+      "explain": "ToTensor 已把像素压到 [0,1]；Normalize 再减均值除方差，让输入均值 0 方差 1，损失面更圆、梯度更稳定。"
+    },
+    {
+      "q": "评估循环里 `model.eval()` 和 `torch.no_grad()` 各自的作用是？",
+      "options": [
+        "都是省显存的",
+        "前者关闭 dropout/BN 等训练行为，后者不建计算图省显存加速",
+        "前者提高准确率，后者防止过拟合",
+        "都必须在训练循环里使用"
+      ],
+      "answer": 1,
+      "explain": "eval() 切换模块行为（BN 用移动平均、dropout 关闭）；no_grad() 停止梯度追踪。两者作用不同都要做，且与 train() 成对。"
+    },
+    {
+      "q": "训练时 loss 每 epoch 都下降，但 wandb 显示 test acc 从 epoch 6 起不再上升甚至微降，正确解读是？",
+      "options": [
+        "学习率太小",
+        "典型过拟合，epoch 6 附近是早停点",
+        "batch_size 太大",
+        "数据归一化做错了"
+      ],
+      "answer": 1,
+      "explain": "训练指标持续改善而测试指标停滞回落，正是偏差-方差框架里的方差上升；曲线张口处就是早停的黄金时机。"
+    },
+    {
+      "q": "DataLoader 的 `shuffle=True` 为什么只设置在训练集？",
+      "options": [
+        "测试集 shuffle 会报错",
+        "训练需打乱防止模型记住批次顺序，测试集只按序评估无需打乱",
+        "shuffle 会降低测试准确率",
+        "训练集不打乱会显存溢出"
+      ],
+      "answer": 1,
+      "explain": "打乱让每批数据分布更均匀、梯度噪声去相关；测试只做一遍前向评估，顺序不影响准确率，按序还便于对照错例。"
+    },
+    {
+      "q": "MLP 在 MNIST 拿到 97%，逻辑回归只有约 92%，这 5 个点主要来自哪里？",
+      "options": [
+        "参数更多所以必然更强",
+        "隐藏层+ReLU 学到了像素间的非线性组合特征（笔画、环），线性模型学不到",
+        "MLP 用了更多训练数据",
+        "MLP 的损失函数不同"
+      ],
+      "answer": 1,
+      "explain": "两者都用交叉熵、同样数据；差距本质是 MLP 的非线性表示能力——手工特征工程换成网络自动学的层级特征，这正是深度学习的核心卖点。"
+    },
+    {
+      "q": "wandb 这类工具相对「训练完打印最终分数」的核心增量价值是？",
+      "options": [
+        "分数算得更准",
+        "记录训练全过程曲线与超参，能定位早停时机、对比不同 lr 的整条轨迹",
+        "自动选择最优模型",
+        "能替代测试集"
+      ],
+      "answer": 1,
+      "explain": "最终分数只是快照，曲线才是过程：震荡、平台、张口、见顶——只能从全程记录里读出来，超参可追溯也让实验可复现可对比。"
+    }
+  ]
+}

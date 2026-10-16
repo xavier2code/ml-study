@@ -1,0 +1,71 @@
+{
+  "day": 89,
+  "title": "Checkpoint + Resume + EMA",
+  "sections": [
+    {
+      "h": "为什么 checkpoint 是训练的命脉",
+      "md": "几小时的训练可能因为断电、OOM、代码 bug、云主机被抢占而中断。**Checkpoint 的唯一目标：让训练「死了也能原地爬起来」**。一份不合格的 checkpoint 会让你损失的不只是机器时间——50M 模型训半天中断后从零重来，等于所有调参信息也一起丢了。\n\n判断 checkpoint 逻辑是否「完善」的三个问题：\n\n1. 断在任意一步，恢复后 loss 曲线是否**无缝衔接**（不是重启后再缓慢降回）\n2. 恢复后学习率、RNG 状态、数据迭代位置是否与中断时刻一致\n3. 磁盘写一半断电，会不会把好 checkpoint 也毁了"
+    },
+    {
+      "h": "完善的 checkpoint 逻辑",
+      "md": "除了模型权重，必须存的东西：**优化器状态**（Adam 的动量/方差）、**调度器状态**（当前 LR）、**全局 step**、**RNG 状态**、**数据进度**。少了优化器状态，恢复后前几百步 loss 会明显抖动——动量记忆丢了。\n\n```python\nstate = {\n  \"model\": model.state_dict(),\n  \"optimizer\": optimizer.state_dict(),\n  \"scheduler\": scheduler.state_dict(),\n  \"step\": step,\n  \"torch_rng\": torch.get_rng_state(),\n  \"cuda_rng\": torch.cuda.get_rng_state(),\n  \"sampler_state\": sampler.state_dict(),  # 数据进度\n}\ntorch.save(state, tmp_path)          # 先写临时文件\nos.replace(tmp_path, final_path)      # 原子重命名\n```\n\n两个工程细节：\n\n- **原子写**：直接 `torch.save(path)` 写一半崩溃会毁掉旧文件；先写 tmp 再 `os.replace` 保证磁盘上任何时刻都有一个完整版本\n- **保留策略**：`keep_last=3, keep_best=1`（按 val loss 最优），其余删除，避免磁盘被几百 GB 的历史 checkpoint 挤爆\n\n恢复就是对称的 `load_state_dict`，并把 dataloader 的 sampler 状态恢复到断点位置。"
+    },
+    {
+      "h": "EMA：让权重更平滑的影子模型",
+      "md": "直觉： SGD 在谷底附近来回震荡，**最近几千步权重的平均值**往往比任何单点更接近谷心。**EMA（指数移动平均）** 维护一份影子权重：\n\n```\nθ_EMA ← decay · θ_EMA + (1 - decay) · θ\n```\n\ndecay 通常取 0.999–0.9999，即影子权重是过去约 1000–10000 步的加权平均。特性：\n\n- 训练初期权重变化快，固定大 decay 会让 EMA 严重滞后——常用**预热式 decay**：`decay = min(standard, (1+step)/(10+step))`\n- EMA 不参与梯度计算，只是「旁听」；**评估和最终保存用 EMA 权重**，训练继续用原权重\n- 显存代价：多一份模型副本（50M 模型约 200MB，可接受）\n\n这就是 Stable Diffusion、很多 GPT 训练脚本里 `--ema` 开关背后的全部原理。"
+    },
+    {
+      "h": "在 mini-GPT 上跑 EMA",
+      "md": "实现只需十几行：\n\n```python\nimport copy\n\nclass EMA:\n    def __init__(self, model, decay=0.999):\n        self.shadow = copy.deepcopy(model).eval()\n        self.decay = decay\n        for p in self.shadow.parameters():\n            p.requires_grad_(False)\n\n    @torch.no_grad()\n    def update(self, model):\n        d = min(self.decay, (1 + self.step) / (10 + self.step))\n        for s, p in zip(self.shadow.parameters(), model.parameters()):\n            s.mul_(d).add_(p, alpha=1 - d)\n```\n\n每个优化器步后调用 `ema.update(model)`；评估时 `val_loss(ema.shadow)`。在 mini-GPT 上对照两条 val loss 曲线：EMA 版通常更平滑，末段低 0.01–0.05 nats。注意 checkpoint 里要把 `ema.shadow` 一并存进去，否则恢复后 EMA 从零开始热身。\n\n> 自检：如果 decay=0.999，新权重每步只占 0.1%，那 EMA 大约反映多少步的历史？（答：约 1/(1-decay) = 1000 步的有效窗口）"
+    },
+    {
+      "h": "今日串联",
+      "md": "今天的两块内容是「训练基建」的最后拼图：checkpoint/resume 保证**过程可恢复**，EMA 提升**产物质量**。它们与昨天的话题首尾呼应——spike 之后靠 checkpoint 回滚，而 EMA 权重对局部震荡天然免疫。此后你的每个训练脚本都默认带上这两件套。\n\n明日：学习率调度的完整拼图——warmup + cosine decay，并亲眼对比有无 warmup 的差别。"
+    }
+  ],
+  "keyPoints": [
+    "完善 checkpoint 必存：模型 + 优化器状态 + 调度器 + step + RNG + 数据进度",
+    "原子写：先存临时文件再 os.replace，防止写一半崩溃毁掉旧 checkpoint",
+    "保留策略 keep_last + keep_best，按 val loss 挑最优，控制磁盘占用",
+    "EMA：θ_EMA ← decay·θ_EMA + (1-decay)·θ，decay≈0.999 即约千步有效平均窗口",
+    "EMA 早期滞后问题用预热式 decay 解决：min(standard, (1+step)/(10+step))"
+  ],
+  "quiz": [
+    {
+      "q": "checkpoint 里只存了模型权重，没存优化器状态。恢复训练后最可能的现象是？",
+      "options": ["完全无法训练", "前几百步 loss 明显抖动甚至升高，因为 Adam 的动量/方差记忆丢了", "训练完全不受影响", "学习率会自动变成 0"],
+      "answer": 1,
+      "explain": "Adam 的动量与二阶矩是训练历史的累积；清零后优化轨迹突变，loss 曲线出现一个「伤疤」后才逐渐恢复平滑。"
+    },
+    {
+      "q": "为什么保存 checkpoint 要「先写临时文件再 os.replace」？",
+      "options": ["为了让文件更小", "为了保证原子性：写一半崩溃时旧 checkpoint 仍然完整", "为了加快 IO 速度", "为了兼容 Windows"],
+      "answer": 1,
+      "explain": "os.replace 在同一文件系统上是原子操作；若直接覆盖目标文件，中断会把新旧两份都毁掉，训练彻底白费。"
+    },
+    {
+      "q": "EMA 的 decay=0.999，其影子权重的有效平均窗口约为多少步？",
+      "options": ["约 10 步", "约 1000 步", "约 100000 步", "整个训练的所有步数"],
+      "answer": 1,
+      "explain": "几何衰减的有效窗口约为 1/(1-decay) = 1/0.001 = 1000 步；decay 越大窗口越长、影子越「惰性」。"
+    },
+    {
+      "q": "EMA 早期严重滞后于真实权重的原因和对策是？",
+      "options": ["原因：学习率太小；对策：调大学习率", "原因：初期权重变化快而 decay 固定太大；对策：用预热式 decay 随步数从小到大", "原因：batch 太小；对策：梯度累积", "原因：梯度裁剪；对策：去掉裁剪"],
+      "answer": 1,
+      "explain": "训练开始时权重每步都在大幅移动，固定 decay=0.999 让 EMA 几乎不动；min(standard, (1+step)/(10+step)) 让它先跟得上再慢下来。"
+    },
+    {
+      "q": "关于 EMA 权重的使用方式，正确的是？",
+      "options": ["用 EMA 权重继续训练", "训练用原权重，评估/最终发布用 EMA 权重", "两者交替使用", "EMA 只在推理框架里才有用"],
+      "answer": 1,
+      "explain": "EMA 是「旁听生」：不参与梯度更新，只在验证与最终导出时替换上去，以获得更平滑、通常更优的权重。"
+    },
+    {
+      "q": "训练中断后恢复，loss 曲线却像重新开始一样缓慢爬升。最可能漏掉了什么？",
+      "options": ["没保存/没恢复学习率与优化器状态，或没恢复数据进度", "模型层数太深", "没开数据增强", "梯度累积步数不对"],
+      "answer": 0,
+      "explain": "无缝 resume 需要恢复完整训练状态；若 LR 从头 warmup、Adam 状态清零、数据又从头读，曲线自然像重启。"
+    }
+  ]
+}

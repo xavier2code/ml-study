@@ -1,0 +1,66 @@
+{
+  "day": 66,
+  "title": "模型部署入门 (TorchScript / ONNX)",
+  "sections": [
+    {
+      "h": "训练完了，然后呢？",
+      "md": "训练脚本跑出 82% 的准确率只是一半——**让模型在真实环境里以可预测的延迟和成本服务用户**是另一半，这一半在课程里第一次系统展开。\n\n为什么不直接部署 PyTorch 脚本？三个理由：**依赖重**（完整 PyTorch 动辄数 GB，边缘设备装不下）；**性能不可控**（Python 解释器 + 动态图调度开销大，无法做深度算子融合优化）；**环境碎片化**（手机、浏览器、嵌入式板卡没有 Python）。部署的本质是**把「研究代码」翻译成「可执行的计算图」**——权重和结构固定下来，优化器可以放心地融合算子、消除冗余。\n\n今天两条主线：PyTorch 官方的 TorchScript（PyTorch 生态内部的中间表示），和业界通用交换格式 ONNX（一套格式，多种运行时）。"
+    },
+    {
+      "h": "TorchScript：trace 与 script 两种模式",
+      "md": "TorchScript 把动态图模型「冻结」成静态图。两种方式：\n\n```python\nmodel.eval()\nexample = torch.randn(1, 3, 32, 32)\n\n# 方式一：trace——喂一个样例，记录跑过的算子\ntraced = torch.jit.trace(model, example)\n\n# 方式二：script——直接解析 Python 源码\nscripted = torch.jit.script(model)\n\nscripted.save('model.pt')        # 脱离模型定义代码即可加载\n```\n\n**trace 的问题在控制流**：它只记录样例走过的路径。如果 forward 里有 `if x > 0` 分支或随输入长度变化的循环，trace 会把那一次的选择硬编码进去。**script 能理解真正的控制流**，但要求代码是 TorchScript 的 Python 子集——不能有任意 Python 特性（闭包、鸭子类型、第三方库调用）。\n\n实践选择：纯卷积/线性网络用 trace（简单可靠）；含分支循环的模型用 script；混合方案 `@script` 修饰关键模块 + 外层 trace 也常见。无论哪种，导出前先 `model.eval()`（否则 dropout/batchnorm 行为被错误固化），导出后**用同样输入比对两边输出**（`torch.allclose`，容差 1e-5 量级）——不一致的导出是静默的精度灾难。"
+    },
+    {
+      "h": "ONNX：一次导出，到处运行",
+      "md": "ONNX（Open Neural Network Exchange）是模型交换的标准格式：把计算图 + 权重存成 protobuf 文件，运行时只需实现 ONNX 算子集。价值在于解耦：PyTorch 训练、ONNX Runtime / TensorRT / 浏览器 WASM / 手机 NPU 推理，互不绑定。\n\n```python\ntorch.onnx.export(\n    model, example, 'model.onnx',\n    input_names=['x'], output_names=['logits'],\n    opset_version=17,          # 算子集版本，决定支持的算子与特性\n    dynamic_axes={'x': {0: 'batch'},   # 第一维动态：任意 batch\n                  'logits': {0: 'batch'}})\n```\n\n**dynamic_axes 是新手最常漏的一步**：不声明则 batch 维被固化成样例的 1，线上来一个 batch=32 直接报错。**opset 版本**是另一坑：太老不支持新算子（如新激活函数），太新则部分运行时还没实现——17 是当前稳妥选择。"
+    },
+    {
+      "h": "ONNX Runtime 推理与验证",
+      "md": "用 ONNX Runtime 加载并推理，和 PyTorch 做一致性对比：\n\n```python\nimport onnxruntime as ort\nimport numpy as np\n\nsess = ort.InferenceSession('model.onnx',\n        providers=['CPUExecutionProvider'])   # GPU 用 CUDAExecutionProvider\nx = np.random.randn(8, 3, 32, 32).astype(np.float32)\nlogits = sess.run(['logits'], {'x': x})[0]\n\n# 对比：与 torch 模型同输入的输出比对\n# np.allclose(logits, torch_out, atol=1e-4) 应为 True\n```\n\n完整验证清单：①随机一批输入下输出一致；②**换不同 batch 尺寸**再测（验证 dynamic_axes 生效）；③**换真实测试集图片**测准确率（排除预处理差异的干扰——normalize 参数不一致是最常见的「部署后掉点」元凶）；④测延迟（先 warmup 几十次再计时，首次运行有图优化开销）。\n\nCPU 上 ONNX Runtime 常比 eager 快 1.5–3×：算子融合与线程优化，正是「脱离解释器」的收益。"
+    },
+    {
+      "h": "与 LLM 的关联：推理优化的同一套哲学",
+      "md": "今天的流程是所有 LLM 推理引擎的微缩版：vLLM、llama.cpp、TensorRT-LLM 做的事本质相同——**把动态图固化为可优化的静态计算图，再针对硬件做激进变换**。你会反复看到熟悉的概念：算子融合（attention + softmax 合并成 flash attention）、量化（FP16/INT8，正是 ONNX Runtime 也支持的 quantization 模块）、动态维度（LLM 的序列长度维对应今天的 batch 维）。\n\nAgent 工程视角：模型从「训练产物」到「可服务组件」的每一步（固化、验证一致性、测延迟）都是把 ML 接入软件系统的标准接口。**一个只会训练不会部署的 practitioner，交付的只是半成品**。"
+    }
+  ],
+  "keyPoints": [
+    "部署三动机：摆脱重依赖、获得静态图优化、适配无 Python 的运行环境",
+    "trace 记录样例路径（控制流被硬编码），script 解析源码（需 TorchScript 子集）；混合使用是常态",
+    "导出前 model.eval()，导出后必须用同输入比对输出一致性（atol≈1e-5）",
+    "ONNX 是交换格式：opset 决定算子支持（17 稳妥），dynamic_axes 不声明 batch 维会被固化",
+    "部署验证四步：随机输入一致 → 变 batch 一致 → 真实数据准确率 → warmup 后测延迟",
+    "「部署后掉点」最常见元凶是预处理（normalize 参数）与训练不一致"
+  ],
+  "quiz": [
+    {
+      "q": "torch.jit.trace 的固有局限是？",
+      "options": ["不能保存模型", "只记录样例输入走过的分支，数据相关的 if/循环会被硬编码", "速度比 eager 慢", "只支持 CPU"],
+      "answer": 1,
+      "explain": "trace 是「跟着样例走一遍记下来」：分支没走到就永远不存在。含动态控制流的模型应改用 script 或混合方式。"
+    },
+    {
+      "q": "导出 ONNX 时忘记设置 dynamic_axes，最直接的后果是？",
+      "options": ["文件变大", "导出直接失败", "batch 维被固化成样例尺寸，线上其他 batch 报错", "精度下降一半"],
+      "answer": 2,
+      "explain": "不声明动态维，图的输入形状就固定为导出样例（如 batch=1）；运行时收到 batch=32 会因形状不匹配报错。"
+    },
+    {
+      "q": "导出模型前调用 model.eval() 的原因是？",
+      "options": ["加快导出速度", "固化 dropout 关闭、batchnorm 用统计量的推理行为，否则训练态行为被错误打包", "ONNX 格式要求", "减少文件体积"],
+      "answer": 1,
+      "explain": "eval 模式下 dropout 恒等、BN 使用运行统计量。若在 train 态导出，这些随机/批依赖行为会进入计算图，线上结果不可复现。"
+    },
+    {
+      "q": "模型部署后准确率明显下降，首先应检查？",
+      "options": ["换更大的模型", "预处理是否与训练完全一致（如 normalize 的 mean/std、通道顺序）", "增加 checkpoint 数量", "重装 CUDA"],
+      "answer": 1,
+      "explain": "导出本身有输出一致性校验兜底；线上掉点的头号元凶是输入管道差异——归一化参数、RGB/BGR、resize 方式不一致都会静默改变输入分布。"
+    },
+    {
+      "q": "ONNX Runtime 在 CPU 上常比 PyTorch eager 快的原因是？",
+      "options": ["用了更多内存", "静态图允许算子融合与线程级优化，消除了 Python 解释和动态调度开销", "压缩了权重", "跳过了部分层"],
+      "answer": 1,
+      "explain": "eager 模式每个算子都经过 Python 调用与动态分发；静态图可整图优化（融合、常量折叠、并行调度），与 LLM 推理引擎的优化哲学同源。"
+    }
+  ]
+}

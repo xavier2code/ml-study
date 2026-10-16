@@ -1,0 +1,65 @@
+{
+  "day": 135,
+  "title": "稠密检索 + BM25",
+  "sections": [
+    {
+      "h": "稀疏与稠密：两条检索路线",
+      "md": "同一个问题\"怎么退货\"，文档里写的是\"退款申请处理流程\"——没有共同关键词但语义相近，**稠密检索**赢。反过来，搜错误码 `E4501`、函数名 `cross_entropy`、合同编号——这种**精确 token 匹配**，BM25 赢，稠密模型反而可能把生僻专名编码得一塌糊涂。\n\n| | 稀疏（BM25） | 稠密（向量） |\n|---|---|---|\n| 原理 | 词项统计匹配 | 语义向量相似度 |\n| 强项 | 精确术语、编号、代码标识符 | 同义改写、跨语言、模糊表述 |\n| 弱点 | 不懂同义词 | 生僻专名、域偏移、训练分布外 |\n| 索引结构 | 倒排索引 | 向量索引（HNSW） |\n\n生产系统的结论很早就有共识：**别二选一，做混合检索**。BM25 保底精确匹配，稠密补语义泛化。"
+    },
+    {
+      "h": "倒排索引：稀疏检索的骨架",
+      "md": "正排索引是\"文档 → 它包含哪些词\"，倒排索引反过来：**词 → 包含它的文档列表**（posting list）。查询时取各查询词的 posting list 求交集/并集，再对候选打分——不用扫描全部文档。\n\n```text\n\"退货\"  → [doc3, doc7, doc12, ...]\n\"政策\"  → [doc1, doc3, doc9, ...]\n查询(退货 AND 政策) → 交集 {doc3} → 对 doc3 精打分\n```\n\n工程要点：中文要先**分词**（jieba / HanLP），因为中文没有天然空格；Elasticsearch / OpenSearch 把倒排索引做到了工业级（倒排 + 跳表加速交并、TF-BM25 打分内置）。posting list 之间的合并用跳表（skip list）优化，长链表交集近似 O(n)。"
+    },
+    {
+      "h": "BM25：打分公式与三个直觉",
+      "md": "BM25 是\"词项频率 × 逆文档频率\"家族的成熟终点，对每个 query 词 qi 给文档打分再求和：\n\n```\nscore(q, d) = Σ IDF(qi) · f(qi,d)·(k1+1) / ( f(qi,d) + k1·(1 − b + b·|d|/avgdl) )\nIDF(qi)    = ln( (N − df + 0.5) / (df + 0.5) + 1 )\n```\n\n三个直觉，每个参数管一件事：\n\n- **IDF**：词在越多文档出现越不重要（\"的\"IDF 趋近 0），越稀有权重越高\n- **k1 控制 TF 饱和**：词出现 10 次的 relevance 不是 1 次的 10 倍——TF 增长被压缩成亚线性，k1 越大饱和越慢。典型 k1 = 1.2~2.0\n- **b 控制文档长度归一化**：长文档天然词多、TF 高，b（0~1）决定给长文档打多大折扣。典型 b = 0.75\n\n```python\nfrom rank_bm25 import BM25Okapi\ncorpus = [list(jieba.cut(d)) for d in docs]\nbm25 = BM25Okapi(corpus)\nscores = bm25.get_scores(list(jieba.cut(\"怎么退货\")))\n```\n\nBM25 至今仍是强 baseline：无需训练、可解释、零成本冷启动。任何\"高级检索\"上线前先问一句：**打赢 BM25 了吗？**"
+    },
+    {
+      "h": "稠密检索：双塔、BGE 与 M3E",
+      "md": "稠密检索用**双塔（bi-encoder）架构**：query 和文档分别过同一个 Transformer encoder，取 [CLS] 或池化向量，用余弦相似度匹配。关键性质：**文档向量可以离线预计算**——线上只需编码一次 query 再做 ANN 查询。\n\n训练靠**对比学习**：正例对（query, 相关文档）在向量空间拉近，负例（in-batch negatives，同 batch 其他文档）推开，InfoNCE 损失。这和 CLIP 是同一套思想。\n\n中文选型：\n\n- **BGE（智源 BAAI）**：中文检索事实标准，`bge-large-zh-v1.5` / `bge-m3`，C-MTEB 榜首常客\n- **M3E**：本土社区流行，轻量场景可用\n- **bge-m3**：一个模型同时输出 dense + sparse + multi-vector 三种表示，多语混合语料的偷懒选择\n\n```python\nfrom sentence_transformers import SentenceTransformer\nmodel = SentenceTransformer(\"BAAI/bge-large-zh-v1.5\")\n# 注意：bge 检索建议给 query 加指令前缀\nq = model.encode(\"为这个句子生成表示以用于检索相关文章：怎么退货\")\ndocs_vec = model.encode(doc_chunks, normalize_embeddings=True)\nsim = docs_vec @ q  # 已归一化，内积即余弦\n```\n\n坑：embedding 模型对**域偏移**敏感——医疗、法律、金融语料上通用模型掉点明显，常见做法是用领域数据微调（仍是对比学习）。"
+    },
+    {
+      "h": "混合检索 + RRF 融合",
+      "md": "两路各自检索出 top-k 后需要融合。工业界默认 **RRF（Reciprocal Rank Fusion）**：不看分数只看排名——\n\n```\nRRF_score(d) = Σ_i  1 / (k + rank_i(d))    # k 通常取 60\n```\n\n例：某文档在 BM25 排第 2、稠密排第 10，则得 1/62 + 1/70 ≈ 0.0303。RRF 的好处：**两套完全不同量纲的分数无需归一化**，对离群分数鲁棒，实现十行。\n\n```python\ndef rrf(results_a, results_b, k=60, top_n=10):\n    scores = {}\n    for lst in (results_a, results_b):\n        for rank, doc in enumerate(lst, 1):\n            scores[doc] = scores.get(doc, 0) + 1 / (k + rank)\n    return sorted(scores, key=scores.get, reverse=True)[:top_n]\n```\n\n工程形态：Qdrant 已支持 sparse vector 原生混合；或 Elasticsearch/OpenSearch 的 hybrid query；或最朴素的两服务并行 + 应用层 RRF。明天讲存进哪个向量库。"
+    }
+  ],
+  "keyPoints": [
+    "BM25 赢在精确术语/编号/代码标识符，稠密赢在同义改写与语义泛化，生产用混合检索",
+    "倒排索引 = 词 → 文档列表（posting list），中文需先分词，交并用跳表加速",
+    "BM25 三参数：IDF 稀有性、k1 的 TF 饱和、b 的文档长度归一化；典型 k1=1.2~2.0、b=0.75",
+    "双塔文档向量可离线预计算；BGE 是中文检索事实标准，域偏移场景需对比学习微调",
+    "RRF 用排名倒数融合两路结果，免除分数归一化，k 取 60 是工业默认"
+  ],
+  "quiz": [
+    {
+      "q": "BM25 中把 k1 从 1.2 调大（比如到 2.0），对词频（TF）的影响是？",
+      "options": ["TF 饱和得更快，出现次数很快不再增加权重", "TF 饱和得更慢，高频词权重更接近线性增长", "k1 只影响 IDF 计算，与 TF 无关", "文档长度归一化变强"],
+      "answer": 1,
+      "explain": "k1 控制 TF 饱和速度：k1 越大，f(qi,d) 的边际增益衰减越慢，高频词能继续积累权重；k1→0 则 TF 几乎退化为二值（出现过就行）。调 k1 本质是在\"词重复出现到底多重要\"上做领域适配。"
+    },
+    {
+      "q": "参数 b 在 BM25 中的作用是？",
+      "options": ["控制查询扩展程度", "控制文档长度归一化强度：b=1 完全按长度惩罚，b=0 不惩罚", "控制候选文档数量", "控制分词粒度"],
+      "answer": 1,
+      "explain": "长文档天然词多、TF 偏高，b 决定按 |d|/avgdl 给长文档打多大折扣。语料长度方差大时 b 敏感，0.75 是稳健默认；b=0 时 4000 字和 40 字的文档同 TF 同分。"
+    },
+    {
+      "q": "为什么双塔（bi-encoder）能离线建好索引，而 cross-encoder 不能？",
+      "options": ["双塔用了更小的模型所以更快", "双塔把 query 和文档分开独立编码，文档向量不依赖 query，可预先算好；cross-encoder 必须把 query 和文档拼在一起过模型", "cross-encoder 没有训练数据", "双塔支持 GPU 加速而 cross-encoder 不支持"],
+      "answer": 1,
+      "explain": "独立性是关键：双塔中文档向量与 query 无关，可全量离线计算并建 ANN 索引；cross-encoder 的输入是 (query, doc) 对，每个新 query 都要对所有候选重新前向，只能放在召回后的小集合上精排——这正是 Day 137 两阶段架构的由来。"
+    },
+    {
+      "q": "用户要搜错误码 \"E4501\" 和 API 名 \"cross_entropy\"，哪路检索更可靠？",
+      "options": ["稠密检索，因为语义理解强", "BM25/稀疏检索，精确 token 匹配是它的主场", "必须用 GraphRAG", "两路都不行，只能全表扫描"],
+      "answer": 1,
+      "explain": "生僻专名、编号、代码标识符在 embedding 空间往往被压进低区分度区域，稠密检索容易失手；而它们正是 BM25 的 IDF 高频受益者（稀有 → 高权重 → 精确命中）。这也是混合检索存在的根本理由。"
+    },
+    {
+      "q": "RRF 融合 BM25 与稠密两路结果的最大优点是？",
+      "options": ["把两路分数归一化到同一量纲后加权", "只用排名倒数，完全不需要处理两套不同量纲的分数，对离群分数鲁棒", "能把召回率提升到 100%", "不需要两路都检索，一路即可"],
+      "answer": 1,
+      "explain": "BM25 分数无界、余弦相似度在 [-1,1]，直接加权需要精细的归一化与权重调参；RRF 只消费排名，天然免疫量纲问题，k=60 一个默认值就能工作得很好，是工业界混合检索的默认起点。"
+    }
+  ]
+}
