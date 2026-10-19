@@ -54,6 +54,11 @@
     --hover-bg: #232a3a;
     --m-grad: #1f1424;
     --m-border: #4a2438;
+    --heat-0: #1b202b;
+    --heat-1: #173464;
+    --heat-2: #1d4ea8;
+    --heat-3: #3b74e8;
+    --heat-4: #8ab4ff;
   }
   html.light {
     --bg: #f4f6fa;
@@ -75,6 +80,11 @@
     --hover-bg: #e2e8f3;
     --m-grad: #f6ecf9;
     --m-border: #dfc2e8;
+    --heat-0: #e8ecf3;
+    --heat-1: #c3d7f5;
+    --heat-2: #8fb4ef;
+    --heat-3: #4c86e6;
+    --heat-4: #1d5ee0;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
@@ -486,6 +496,31 @@
     .nav-hint { display: none; }
   }
 
+  /* ============ 学习热力图 ============ */
+  .heat-wrap { padding: 6px 0; }
+  .heat-head { font-size: 16px; font-weight: 600; margin: 8px 0 4px; }
+  .heat-sub { font-size: 12px; font-weight: 400; color: var(--text-dim); margin-left: 8px; }
+  .heat-stats { display: flex; gap: 10px; flex-wrap: wrap; margin: 12px 0 16px; }
+  .hstat { background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px; padding: 6px 12px; font-size: 12px; color: var(--text-dim); }
+  .hstat strong { color: var(--accent); font-size: 14px; margin-right: 4px; }
+  .heat-scroll { overflow-x: auto; padding-bottom: 6px; }
+  .heat-months { display: flex; gap: 3px; font-size: 10px; color: var(--text-dim); height: 16px; margin-left: 20px; }
+  .hm-mon { width: 13px; flex: 0 0 auto; overflow: visible; white-space: nowrap; }
+  .heat-body { display: flex; gap: 3px; }
+  .heat-wds { display: flex; flex-direction: column; gap: 3px; width: 17px; flex: 0 0 auto; }
+  .hm-wd { height: 13px; font-size: 10px; line-height: 13px; color: var(--text-dim); }
+  .heat-cols { display: flex; gap: 3px; }
+  .heat-col { display: flex; flex-direction: column; gap: 3px; }
+  .hm-cell { width: 13px; height: 13px; border-radius: 3px; background: var(--heat-0); flex: 0 0 auto; }
+  .hm-cell.fut { opacity: 0.35; }
+  .hm-cell.l1 { background: var(--heat-1); }
+  .hm-cell.l2 { background: var(--heat-2); }
+  .hm-cell.l3 { background: var(--heat-3); }
+  .hm-cell.l4 { background: var(--heat-4); }
+  .heat-legend { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-dim); margin-top: 8px; flex-wrap: wrap; }
+  .heat-legend .hm-cell { width: 11px; height: 11px; }
+  .heat-hint { margin-left: 10px; }
+
   /* 减少动效（系统无障碍设置） */
   @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
@@ -506,6 +541,7 @@
     <input type="search" id="searchInput" placeholder="🔍 搜索 160 天内容…" />
   </div>
   <div class="io-btns">
+    <button class="io-btn" id="btnHeat" title="学习热力图：勾任务 / 交测验自动打卡">🔥 热图</button>
     <button class="io-btn" id="btnTheme" title="切换深色 / 浅色主题（原理图自动跟随切换）">☀️</button>
     <button class="io-btn" id="btnReview" title="重测做错的题：答对自动移出错题本，答错保留">🔁 错题 <strong id="wrongCount">0</strong></button>
     <button class="io-btn" id="btnExport" title="把学习进度和测验成绩导出为 JSON 文件备份">⬇︎ 导出进度</button>
@@ -553,12 +589,13 @@ const STORAGE_KEY = "ml-study-v1";
 const QUIZ_KEY = "ml-quiz-v1";
 const WRONG_KEY = "ml-wrong-v1";
 const THEME_KEY = "ml-theme-v1";
+const HEAT_KEY = "ml-heat-v1";
 
 // ============== state ==============
 let CURRENT_DAY = 1;
 let QUIZ = {};
 let WRONG = {};          // 错题本 { "day-qi": { day, qi, addedAt } }
-let VIEW = "day";        // day | search | review
+let VIEW = "day";        // day | search | review | heat
 let THEME = "dark";      // dark | light（浅色时自动用 figures 的 -light 变体）
 const LIGHT_FIG = new Map(); // 原理图 src -> 是否存在 -light 变体
 let SEARCH_INDEX_READY = false;
@@ -575,6 +612,7 @@ function loadState() {
   } catch (e) { console.warn("state load failed", e); }
   try { QUIZ = JSON.parse(localStorage.getItem(QUIZ_KEY) || "{}") || {}; } catch (e) { QUIZ = {}; }
   try { WRONG = JSON.parse(localStorage.getItem(WRONG_KEY) || "{}") || {}; } catch (e) { WRONG = {}; }
+  try { HEAT = JSON.parse(localStorage.getItem(HEAT_KEY) || "{}") || {}; } catch (e) { HEAT = {}; }
 }
 function saveState() {
   try {
@@ -586,6 +624,9 @@ function saveQuiz() {
 }
 function saveWrong() {
   try { localStorage.setItem(WRONG_KEY, JSON.stringify(WRONG)); } catch (e) { console.warn("wrong save failed", e); }
+}
+function saveHeat() {
+  try { localStorage.setItem(HEAT_KEY, JSON.stringify(HEAT)); } catch (e) { console.warn("heat save failed", e); }
 }
 function updateWrongBtn() {
   const el = document.getElementById("wrongCount");
@@ -807,6 +848,7 @@ function showDay(d) {
       const day = +e.target.dataset.day;
       const idx = +e.target.dataset.idx;
       setTaskDone(day, idx, e.target.checked);
+      if (e.target.checked) heatBump();
       saveState();
       e.target.parentElement.classList.toggle("done", e.target.checked);
       updateProgress();
@@ -979,6 +1021,7 @@ function bindQuiz(day, quiz) {
       else WRONG[k] = { day, qi: i, addedAt: Date.now() };
     });
     saveWrong(); updateWrongBtn();
+    heatBump(2);
     const pct = Math.round(score / quiz.length * 100);
     const passed = pct >= 80;
     const prev = QUIZ[day] || { best: 0, total: quiz.length };
@@ -1083,6 +1126,7 @@ function exportProgress() {
     state: read(STORAGE_KEY),
     quiz: read(QUIZ_KEY),
     wrong: read(WRONG_KEY),
+    heat: read(HEAT_KEY),
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
@@ -1112,6 +1156,9 @@ function importProgress(file) {
       localStorage.setItem(QUIZ_KEY, JSON.stringify(data.quiz));
       if (data.wrong && typeof data.wrong === "object") {
         localStorage.setItem(WRONG_KEY, JSON.stringify(data.wrong));
+      }
+      if (data.heat && typeof data.heat === "object") {
+        localStorage.setItem(HEAT_KEY, JSON.stringify(data.heat));
       }
       location.reload();
     } catch (e) {
@@ -1345,6 +1392,7 @@ function renderReview(qs, totalBefore) {
       else WRONG[k].addedAt = Date.now();
     });
     saveWrong(); updateWrongBtn();
+    heatBump();
     const res = box.querySelector(".quiz-result");
     const left = Object.keys(WRONG).length;
     res.className = "quiz-result " + (score === qs.length ? "pass" : "fail");
@@ -1354,6 +1402,89 @@ function renderReview(qs, totalBefore) {
     res.scrollIntoView({ block: "center", behavior: "smooth" });
   });
   retry.addEventListener("click", () => showReview());
+}
+
+// ============== 学习热力图 ==============
+const HEAT_WEEKS = 26;
+
+function heatDateKey(d) { return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()); }
+function heatLevel(n) { return n >= 7 ? 4 : n >= 4 ? 3 : n >= 2 ? 2 : n >= 1 ? 1 : 0; }
+
+function heatBump(n) {
+  const k = heatDateKey(new Date());
+  HEAT[k] = (HEAT[k] || 0) + (n || 1);
+  saveHeat();
+}
+
+function heatStats() {
+  const keys = Object.keys(HEAT).filter(k => HEAT[k] > 0).sort();
+  let total = 0;
+  for (const k of keys) total += HEAT[k];
+  // 当前连续：今天还没学不算断，从昨天起算
+  let cur = 0;
+  const d0 = new Date();
+  if (!HEAT[heatDateKey(d0)]) d0.setDate(d0.getDate() - 1);
+  while (HEAT[heatDateKey(d0)]) { cur++; d0.setDate(d0.getDate() - 1); }
+  // 最长连续
+  let best = 0, run = 0, prev = null;
+  for (const k of keys) {
+    if (prev) {
+      const p = new Date(prev + "T00:00:00");
+      p.setDate(p.getDate() + 1);
+      run = heatDateKey(p) === k ? run + 1 : 1;
+    } else run = 1;
+    if (run > best) best = run;
+    prev = k;
+  }
+  return { lit: keys.length, total, cur, best: Math.max(best, cur) };
+}
+
+function showHeat() {
+  VIEW = "heat";
+  const content = document.getElementById("content");
+  const today = new Date(); today.setHours(12, 0, 0, 0);
+  // 周一为一周起点：回退到 26 周前的周一
+  const start = new Date(today);
+  start.setDate(start.getDate() - (HEAT_WEEKS - 1) * 7 - ((start.getDay() + 6) % 7));
+  const cols = [], mons = [];
+  let lastMon = -1;
+  for (let w = 0; w < HEAT_WEEKS; w++) {
+    const cells = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(start);
+      d.setDate(start.getDate() + w * 7 + i);
+      if (d > today) { cells.push('<span class="hm-cell fut"></span>'); continue; }
+      const k = heatDateKey(d);
+      const n = HEAT[k] || 0;
+      cells.push(`<span class="hm-cell l${heatLevel(n)}" title="${k} · ${n ? n + " 次学习动作" : "无记录"}"></span>`);
+    }
+    const cm = new Date(start); cm.setDate(start.getDate() + w * 7);
+    if (cm.getMonth() !== lastMon) { lastMon = cm.getMonth(); mons.push(`<span class="hm-mon">${cm.getMonth() + 1}月</span>`); }
+    else mons.push('<span class="hm-mon"></span>');
+    cols.push('<span class="heat-col">' + cells.join("") + "</span>");
+  }
+  const st = heatStats();
+  const wd = ["一", "", "三", "", "五", "", "日"].map(x => `<span class="hm-wd">${x}</span>`).join("");
+  setHTML(content, `
+    <div class="heat-wrap">
+      <div class="heat-head">🔥 学习热力图 <span class="heat-sub">近 ${HEAT_WEEKS} 周 · 勾任务 +1 / 交测验 +2</span></div>
+      <div class="heat-stats">
+        <span class="hstat"><strong>${st.lit}</strong> 天点亮</span>
+        <span class="hstat"><strong>${st.total}</strong> 次学习动作</span>
+        <span class="hstat"><strong>${st.cur}</strong> 天连续打卡${st.best ? `（最长 ${st.best}）` : ""}</span>
+      </div>
+      <div class="heat-scroll">
+        <div class="heat-months">${mons.join("")}</div>
+        <div class="heat-body">
+          <span class="heat-wds">${wd}</span>
+          <span class="heat-cols">${cols.join("")}</span>
+        </div>
+      </div>
+      <div class="heat-legend">少 <span class="hm-cell l0"></span><span class="hm-cell l1"></span><span class="hm-cell l2"></span><span class="hm-cell l3"></span><span class="hm-cell l4"></span> 多
+        <span class="heat-hint">${st.lit ? "数据仅存本地，随进度一起导出 / 导入" : "完成今天的学习任务后，这里会开始点亮 🔥（数据仅存本地，随进度一起导出 / 导入）"}</span></div>
+      <button class="back-btn" id="backDay3">← 返回 Day ${CURRENT_DAY}</button>
+    </div>`);
+  document.getElementById("backDay3").addEventListener("click", () => showDay(CURRENT_DAY));
 }
 
 // ============== 搜索框 / 错题按钮 / 快捷键 ==============
@@ -1379,6 +1510,7 @@ function bindExtras() {
   });
   document.getElementById("btnTheme").addEventListener("click", () => applyTheme(THEME === "dark" ? "light" : "dark"));
   document.getElementById("btnReview").addEventListener("click", () => showReview());
+  document.getElementById("btnHeat").addEventListener("click", () => showHeat());
   document.addEventListener("keydown", e => {
     if (e.key === "Escape" && VIEW !== "day") { showDay(CURRENT_DAY); return; }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
