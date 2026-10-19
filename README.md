@@ -35,6 +35,7 @@
 | 天导航 + 快捷键 | ← / → 切换上/下一天,Esc 返回当天(输入框内自动屏蔽) |
 | 深色 / 浅色主题 | ☀️ 一键切换,默认跟随系统,原理图自动换用 -light 变体 |
 | PWA 离线 | 可安装到桌面/手机主屏;外壳预缓存,浏览过/搜索过的天自动进缓存,断网可学 |
+| 分享卡片 / SEO 基础 | og:image + Twitter 大卡、robots.txt + sitemap.xml、prefers-reduced-motion 无障碍 |
 
 ### 互动原理图
 
@@ -76,12 +77,15 @@ push 到 `main` 分支后 GitHub Actions 自动发布到 Pages(`.github/workflow
 ```text
 index.html            # 单页应用(无构建、无依赖)
 days.json             # 160 天计划
+milestones.json       # 6 个阶段验收点(单一数据源)
 content/days/*.json   # 每日内容 + 测验
 figures/              # 7 张互动原理图(自包含 HTML + 构建脚本)
-scripts/check-content.mjs  # 内容 schema 校验
+scripts/check-content.mjs  # 内容 + milestones schema 校验
 manifest.webmanifest  # PWA 清单
 sw.js                 # service worker(离线缓存)
 icons/                # PWA 图标(192/512)
+og-image.png          # 社交分享卡片(1200×630)
+robots.txt / sitemap.xml
 docs/                 # 学习诊断与规划原文
 favicon.svg
 ```

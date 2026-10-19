@@ -1,0 +1,80 @@
+[
+  {
+    "day": 7,
+    "phase": "Phase 0",
+    "title": "数学速通 + Python 工具栈",
+    "crit": "numpy 梯度对比 PyTorch 误差 < 1e-6 + 梯度 blog 发布。",
+    "checks": [
+      "numpy 实现 softmax + cross-entropy + MLP 前向",
+      "numpy 手写反向传播，PyTorch 验证误差 < 1e-6",
+      "掌握 SGD / Momentum / Adam 公式与直觉",
+      "pandas DataFrame 基础操作熟练（groupby/merge）",
+      "发布一篇《梯度是什么》的 blog（含链式法则矩阵版图解）"
+    ]
+  },
+  {
+    "day": 35,
+    "phase": "Phase 1",
+    "title": "经典机器学习",
+    "crit": "Kaggle Titanic 公开榜 top 30%。",
+    "checks": [
+      "手写 LR / 逻辑回归 / Softmax + CrossEntropy（无 sklearn）",
+      "sklearn 训完 Titanic 并对比 LR / RF / XGBoost 分数",
+      "理解偏差-方差 + L1/L2 正则化 + 集成方法",
+      "完整跑通 PCA / SVM / K-Means / NB 理论 + 代码",
+      "Kaggle Titanic 公开榜截图：top 30% 分数"
+    ]
+  },
+  {
+    "day": 70,
+    "phase": "Phase 2",
+    "title": "深度学习基础",
+    "crit": "ResNet-20 on CIFAR-10 ≥ 88% + 手写 mini-Transformer 跑通。",
+    "checks": [
+      "纯 numpy 手写 2 层 MLP 反向传播，PyTorch 验证 < 1e-6",
+      "PyTorch 训 ResNet-20 on CIFAR-10 ≥ 88% 准确率",
+      "掌握 SGD / Adam / AdamW / 学习率调度 / 初始化",
+      "理解 CNN / RNN / LSTM / Seq2Seq / Attention 演进",
+      "手写 mini-Transformer（6 层 encoder）在文本分类上跑通"
+    ]
+  },
+  {
+    "day": 98,
+    "phase": "Phase 3",
+    "title": "Transformer + 预训练",
+    "crit": "mini-GPT 在 TinyStories loss 平稳下降 + 生成连贯。",
+    "checks": [
+      "用 PyTorch 从零实现 nanoGPT（≤ 500 行）",
+      "掌握 Attention / Multi-Head / RoPE / Flash Attention",
+      "实现 RMSNorm + SwiGLU + GQA（现代 LLM Block）",
+      "手写 BPE tokenizer（不调包），与 tiktoken 验证一致",
+      "mini-GPT 50M 在 TinyStories 上 loss 平稳下降 + 50 个生成样本人工评分 OK"
+    ]
+  },
+  {
+    "day": 133,
+    "phase": "Phase 4",
+    "title": "LLM 深入",
+    "crit": "mini-LLaMA 130M 预训练 + DPO + vLLM 部署 + 量化。",
+    "checks": [
+      "用 PyTorch 实现 mini-LLaMA 130M（含 RMSNorm / RoPE / SwiGLU / GQA）",
+      "mini-LLaMA 130M 在 TinyStories 上预训练完成",
+      "用 TRL 完成 SFT + DPO，附 loss 曲线 + 生成样例",
+      "vLLM 部署 + benchmark（KV cache 显存 vs 吞吐量）",
+      "用 llama.cpp 量化（GGUF / AWQ）部署自己的模型"
+    ]
+  },
+  {
+    "day": 160,
+    "phase": "Phase 5",
+    "title": "工程 + Agent + 多模态",
+    "crit": "端到端可上线项目跑通（Agent / RAG / 多模态 三选一）。",
+    "checks": [
+      "搭建能跑通 100 万文档的 RAG 服务（Qdrant + BGE + Rerank）",
+      "实现 Multi-Agent 编排（LangGraph），含 5+ 工具调用 + 观测",
+      "部署视频理解（Qwen2.5-VL）+ 语音转写（Whisper / Paraformer）",
+      "接入 Langfuse / Arize Phoenix 可观测",
+      "完整 demo 视频（10 分钟）+ 部署文档 + 简历可写项目"
+    ]
+  }
+]

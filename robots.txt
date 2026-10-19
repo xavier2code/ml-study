@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+
+# ML 学习路线 —— 全静态内容站，欢迎抓取
+Sitemap: https://xavier2code.github.io/ml-study/sitemap.xml

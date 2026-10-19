@@ -7,7 +7,11 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DAYS_DIR = join(ROOT, "content", "days");
-const daysJson = JSON.parse(readFileSync(join(ROOT, "days.json"), "utf8"));
+let daysJson;
+try { daysJson = JSON.parse(readFileSync(join(ROOT, "days.json"), "utf8")); } catch (e) {
+  console.log(`✗ days.json: JSON parse error: ${e.message}`);
+  process.exit(1);
+}
 const titles = new Map(daysJson.map((d) => [d.day, d.title]));
 
 const files = process.argv.length > 2
@@ -15,6 +19,31 @@ const files = process.argv.length > 2
   : readdirSync(DAYS_DIR).map((f) => join(DAYS_DIR, f)).sort((a, b) => +a.match(/d(\d+)/)[1] - +b.match(/d(\d+)/)[1]);
 
 let bad = 0;
+
+// milestones.json 单一数据源校验（无论是否指定天数都检查）
+{
+  const mf = join(ROOT, "milestones.json");
+  let errs = [];
+  let ms;
+  try { ms = JSON.parse(readFileSync(mf, "utf8")); } catch (e) { errs.push(`JSON parse error: ${e.message}`); }
+  if (ms) {
+    if (!Array.isArray(ms) || ms.length === 0) errs.push("not a non-empty array");
+    else {
+      const days = [];
+      ms.forEach((m, i) => {
+        if (!Number.isInteger(m.day) || m.day < 1 || m.day > 160) errs.push(`[${i}].day ${m.day} out of range`);
+        else days.push(m.day);
+        if (!m.phase || !m.title || !m.crit) errs.push(`[${i}] phase/title/crit missing`);
+        if (!Array.isArray(m.checks) || m.checks.length < 3) errs.push(`[${i}].checks ${(m.checks || []).length} < 3`);
+      });
+      if (new Set(days).size !== days.length) errs.push("duplicate day");
+      if (ms.length !== 6) errs.push(`expected 6 milestones, got ${ms.length}`);
+    }
+  }
+  if (errs.length) { console.log(`✗ milestones.json: ${errs.join("; ")}`); bad++; }
+  else console.log(`✓ milestones.json · ${ms.length} 个验收点 (day ${ms.map((m) => m.day).join(",")})`);
+}
+
 for (const f of files) {
   const name = f.split("/").pop();
   let j;
