@@ -17,6 +17,8 @@
 ![HTML5](https://img.shields.io/badge/HTML5-E34F26?logo=html5&logoColor=white)
 ![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?logo=javascript&logoColor=black)
 ![No Build](https://img.shields.io/badge/构建-零依赖%20零构建-success)
+![PWA](https://img.shields.io/badge/PWA-离线可用-%235A0FC8?logo=progressive%20web%20apps&logoColor=white)
+![Theme](https://img.shields.io/badge/主题-深%2F浅切换-informational)
 
 > 🔗 **在线访问**:https://xavier2code.github.io/ml-study/
 
@@ -26,8 +28,13 @@
 | --- | --- |
 | **160 天**每日学习内容 | 约 35.6 万字,总学时 640h,覆盖 6 个 Phase:数学 → 经典 ML → DL → Transformer → LLM → 工程/Agent/多模态 |
 | **910 道**掌握测验题 | 每日 4–8 题,≥80% 判定掌握,成绩本地保存 |
-| **7 张**互动式原理图 | anatomy 风格等距机械隐喻(见下表),自包含 HTML,深/浅双主题 |
+| **7 张**互动式原理图 | anatomy 风格等距机械隐喻(见下表),自包含 HTML,随站点深/浅主题自动切换 |
 | 学习进度 / 连击 / 掌握统计 | 数据存于浏览器 localStorage,支持**导出/导入备份**(页面右上角按钮) |
+| 全文搜索 | 标题 / 小节 / 正文 / 要点关键词搜索,命中高亮,点结果直达当天 |
+| 错题本 + 复习模式 | 测验答错自动收錄、答对自动移出;复习模式随机抽 12 题跨天重测 |
+| 天导航 + 快捷键 | ← / → 切换上/下一天,Esc 返回当天(输入框内自动屏蔽) |
+| 深色 / 浅色主题 | ☀️ 一键切换,默认跟随系统,原理图自动换用 -light 变体 |
+| PWA 离线 | 可安装到桌面/手机主屏;外壳预缓存,浏览过/搜索过的天自动进缓存,断网可学 |
 
 ### 互动原理图
 
@@ -72,6 +79,9 @@ days.json             # 160 天计划
 content/days/*.json   # 每日内容 + 测验
 figures/              # 7 张互动原理图(自包含 HTML + 构建脚本)
 scripts/check-content.mjs  # 内容 schema 校验
+manifest.webmanifest  # PWA 清单
+sw.js                 # service worker(离线缓存)
+icons/                # PWA 图标(192/512)
 docs/                 # 学习诊断与规划原文
 favicon.svg
 ```

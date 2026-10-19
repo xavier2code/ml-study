@@ -9,6 +9,21 @@
 <meta property="og:description" content="160 天从经典 ML 到 LLM/Agent 的完整学习路径，含互动原理图与每日测验。" />
 <meta property="og:type" content="website" />
 <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="apple-touch-icon" href="icons/icon-192.png" />
+<meta name="theme-color" content="#0f1115" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="ML 学习" />
+<script>
+  // 提前落主题 class，避免刷新闪深色（默认跟随系统，手动切换后记住选择）
+  try {
+    var t = localStorage.getItem("ml-theme-v1");
+    if (t === "light" || (!t && matchMedia("(prefers-color-scheme: light)").matches)) {
+      document.documentElement.classList.add("light");
+    }
+  } catch { }
+</script>
 <style>
   :root {
     --bg: #0f1115;
@@ -26,6 +41,31 @@
     --med-prio: #ffd24c;
     --code-bg: #0a0c10;
     --code-fg: #c8d0db;
+    --header-bg: rgba(15, 17, 21, 0.92);
+    --hover-bg: #232a3a;
+    --m-grad: #1f1424;
+    --m-border: #4a2438;
+  }
+  html.light {
+    --bg: #f4f6fa;
+    --panel: #ffffff;
+    --panel-2: #edf0f6;
+    --line: #d5dbe7;
+    --text: #1f2430;
+    --text-dim: #5c6678;
+    --accent: #1d5ee0;
+    --accent-2: #b4530a;
+    --high: #d43a3a;
+    --med: #9a6b00;
+    --ok: #15803d;
+    --hi-prio: #d43a3a;
+    --med-prio: #9a6b00;
+    --code-bg: #e9edf3;
+    --code-fg: #2a3142;
+    --header-bg: rgba(244, 246, 250, 0.92);
+    --hover-bg: #e2e8f3;
+    --m-grad: #f6ecf9;
+    --m-border: #dfc2e8;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
@@ -41,7 +81,7 @@
   /* ---------- header ---------- */
   header {
     position: sticky; top: 0; z-index: 50;
-    background: rgba(15, 17, 21, 0.92);
+    background: var(--header-bg);
     backdrop-filter: blur(8px);
     border-bottom: 1px solid var(--line);
     padding: 14px 24px;
@@ -188,7 +228,7 @@
     margin: 20px 0 24px;
     border: 1px solid var(--line);
     border-radius: 8px;
-    background: #0a0c10;
+    background: var(--code-bg);
     padding: 16px;
   }
   .day-figure img { max-width: 100%; height: auto; display: block; margin: 0 auto; }
@@ -202,7 +242,7 @@
       linear-gradient(-45deg, transparent 75%, var(--code-bg) 75%);
     background-size: 16px 16px;
     background-position: 0 0, 0 8px, 8px -8px, -8px 0;
-    background-color: #0a0c10;
+    background-color: var(--code-bg);
     border-radius: 4px;
   }
   .day-figure .fig-placeholder { text-align: center; color: var(--text-dim); }
@@ -230,7 +270,7 @@
     cursor: pointer;
     transition: background 120ms;
   }
-  .sub-task:hover { background: #232a3a; }
+  .sub-task:hover { background: var(--hover-bg); }
   .sub-task input[type="checkbox"] {
     margin-top: 2px; flex: 0 0 auto;
     accent-color: var(--ok);
@@ -249,8 +289,8 @@
   }
 
   .milestone-card {
-    background: linear-gradient(135deg, #1f1424 0%, var(--panel) 100%);
-    border: 1px solid #4a2438;
+    background: linear-gradient(135deg, var(--m-grad) 0%, var(--panel) 100%);
+    border: 1px solid var(--m-border);
     border-radius: 10px;
     padding: 20px 24px;
     margin-bottom: 16px;
@@ -314,7 +354,7 @@
     font-family: ui-monospace, "SF Mono", Menlo, monospace;
   }
   .md-code {
-    background: #0d1117; color: #e6edf3; border: 1px solid var(--line);
+    background: var(--code-bg); color: var(--code-fg); border: 1px solid var(--line);
     border-radius: 8px; padding: 12px 14px; overflow-x: auto;
     margin: 10px 0; font-size: 12.5px; line-height: 1.6;
     font-family: ui-monospace, "SF Mono", Menlo, monospace;
@@ -452,6 +492,7 @@
     <input type="search" id="searchInput" placeholder="🔍 搜索 160 天内容…" />
   </div>
   <div class="io-btns">
+    <button class="io-btn" id="btnTheme" title="切换深色 / 浅色主题（原理图自动跟随切换）">☀️</button>
     <button class="io-btn" id="btnReview" title="重测做错的题：答对自动移出错题本，答错保留">🔁 错题 <strong id="wrongCount">0</strong></button>
     <button class="io-btn" id="btnExport" title="把学习进度和测验成绩导出为 JSON 文件备份">⬇︎ 导出进度</button>
     <button class="io-btn" id="btnImport" title="从之前导出的 JSON 文件恢复进度">⬆︎ 导入进度</button>
@@ -551,12 +592,15 @@ const FIGURES = {
 const STORAGE_KEY = "ml-study-v1";
 const QUIZ_KEY = "ml-quiz-v1";
 const WRONG_KEY = "ml-wrong-v1";
+const THEME_KEY = "ml-theme-v1";
 
 // ============== state ==============
 let CURRENT_DAY = 1;
 let QUIZ = {};
 let WRONG = {};          // 错题本 { "day-qi": { day, qi, addedAt } }
 let VIEW = "day";        // day | search | review
+let THEME = "dark";      // dark | light（浅色时自动用 figures 的 -light 变体）
+const LIGHT_FIG = new Map(); // 原理图 src -> 是否存在 -light 变体
 let SEARCH_INDEX_READY = false;
 let INDEXING = false;
 
@@ -774,7 +818,7 @@ function showDay(d) {
     if (src.endsWith(".html")) {
       // interactive anatomy figure: embed live (self-contained single file)
       const frame = document.createElement("iframe");
-      frame.src = src;
+      themedFigSrc(src).then(s => { frame.src = s; });
       frame.title = "anatomy 交互原理图";
       frame.loading = "lazy";
       slot.replaceChildren();
@@ -1132,6 +1176,40 @@ function bindIoButtons() {
   });
 }
 
+// ============== 主题(深/浅) ==============
+async function figLightOk(base) {
+  if (!LIGHT_FIG.has(base)) {
+    try {
+      const res = await fetch(base.replace(/\.html$/, "-light.html"), { method: "HEAD" });
+      LIGHT_FIG.set(base, res.ok);
+    } catch { LIGHT_FIG.set(base, false); }
+  }
+  return LIGHT_FIG.get(base);
+}
+
+function themedFigSrc(src) {
+  const base = src.replace(/-light\.html$/, ".html");
+  if (THEME !== "light") return Promise.resolve(base);
+  return figLightOk(base).then(ok => ok ? base.replace(/\.html$/, "-light.html") : base);
+}
+
+function applyTheme(t) {
+  THEME = t;
+  try { localStorage.setItem(THEME_KEY, t); } catch { }
+  document.documentElement.classList.toggle("light", t === "light");
+  const mc = document.querySelector('meta[name="theme-color"]');
+  if (mc) mc.setAttribute("content", t === "light" ? "#f4f6fa" : "#0f1115");
+  const btn = document.getElementById("btnTheme");
+  if (btn) btn.textContent = t === "light" ? "🌙" : "☀️";
+  // 已渲染的图随主题切换（无 -light 变体的图保持原版）
+  document.querySelectorAll(".fig-slot iframe").forEach(f => {
+    const cur = f.getAttribute("src");
+    if (cur && /\.html$/.test(cur)) {
+      themedFigSrc(cur).then(s => { if (f.getAttribute("src") !== s) f.setAttribute("src", s); });
+    }
+  });
+}
+
 // ============== 全文搜索 ==============
 function stripMd(s) {
   return String(s)
@@ -1339,6 +1417,7 @@ function bindExtras() {
       }
     }, 250);
   });
+  document.getElementById("btnTheme").addEventListener("click", () => applyTheme(THEME === "dark" ? "light" : "dark"));
   document.getElementById("btnReview").addEventListener("click", () => showReview());
   document.addEventListener("keydown", e => {
     if (e.key === "Escape" && VIEW !== "day") { showDay(CURRENT_DAY); return; }
@@ -1352,6 +1431,7 @@ function bindExtras() {
 // ============== init ==============
 async function init() {
   loadState();
+  applyTheme(document.documentElement.classList.contains("light") ? "light" : "dark");
   updateWrongBtn();
   bindIoButtons();
   bindExtras();
@@ -1366,6 +1446,10 @@ async function init() {
   updateProgress();
   const hashDay = location.hash.match(/^#day-(\d+)$/);
   showDay(hashDay ? Math.min(160, Math.max(1, +hashDay[1])) : CURRENT_DAY);
+  // PWA 离线：注册 service worker（外壳预缓存；浏览过/搜索过的天自动进缓存）
+  if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol)) {
+    navigator.serviceWorker.register("sw.js").catch(() => { });
+  }
 }
 
 // hash 变化（浏览器后退/前进、外部链接）时同步切换 day
