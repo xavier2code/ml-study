@@ -45,7 +45,7 @@
     backdrop-filter: blur(8px);
     border-bottom: 1px solid var(--line);
     padding: 14px 24px;
-    display: flex; align-items: center; gap: 16px;
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
   }
   header h1 {
     font-size: 18px; font-weight: 600; margin: 0;
@@ -384,8 +384,43 @@
   }
   .day-link .ml-mark { color: var(--ok); font-size: 11px; margin-left: 6px; }
 
+  /* ============ 导航 / 搜索 / 错题复习 ============ */
+  .day-nav { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .nav-btn {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 16px; font-size: 12.5px; cursor: pointer; white-space: nowrap;
+  }
+  .nav-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .nav-btn:disabled { opacity: .35; cursor: default; }
+  .nav-hint { font-size: 11.5px; color: var(--text-dim); }
+  .search-wrap { margin-left: auto; }
+  #searchInput {
+    width: 220px; background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 7px; padding: 6px 12px; font-size: 12.5px; outline: none;
+  }
+  #searchInput:focus { border-color: var(--accent); }
+  #searchInput::placeholder { color: var(--text-dim); }
+  mark { background: rgba(76,141,255,.35); color: var(--text); border-radius: 2px; padding: 0 1px; }
+  .sr-head { font-size: 14px; font-weight: 600; color: var(--text); margin: 4px 0 14px; }
+  .sr-item {
+    display: block; border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
+    padding: 12px 16px; margin-bottom: 10px; cursor: pointer; text-decoration: none;
+  }
+  .sr-item:hover { border-color: var(--accent); }
+  .sr-title { font-size: 13.5px; font-weight: 600; color: var(--text); display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .sr-day { color: var(--accent); font-size: 12px; flex: 0 0 auto; }
+  .sr-snip { font-size: 12.5px; color: var(--text-dim); line-height: 1.7; margin: 3px 0; }
+  .sr-sec { color: var(--accent-2); font-size: 11.5px; margin-right: 6px; }
+  .rv-q-tag { font-size: 11.5px; color: var(--accent-2); margin-bottom: 6px; }
+  .rv-empty { text-align: center; color: var(--text-dim); padding: 60px 0; font-size: 14px; line-height: 2; }
+  .back-btn {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+    padding: 8px 18px; font-size: 12.5px; cursor: pointer; margin-top: 16px;
+  }
+  .back-btn:hover { border-color: var(--accent); }
+
   /* ============ 导出/导入 ============ */
-  .io-btns { display: flex; gap: 6px; margin-left: auto; }
+  .io-btns { display: flex; gap: 6px; }
   .io-btn {
     background: var(--panel-2); color: var(--text-dim);
     border: 1px solid var(--line); border-radius: 7px;
@@ -398,6 +433,8 @@
     main { grid-template-columns: 1fr; }
     aside { position: relative; max-height: none; top: 0; }
     .content { padding: 16px; }
+    #searchInput { width: 130px; }
+    .nav-hint { display: none; }
   }
 </style>
 </head>
@@ -411,7 +448,11 @@
   <div class="stat"><strong id="hoursTotal">0h</strong> 已学</div>
   <div class="stat"><strong id="streakStat">0</strong> 连击</div>
   <div class="stat"><strong id="masterStat">0/160</strong> 掌握</div>
+  <div class="search-wrap">
+    <input type="search" id="searchInput" placeholder="🔍 搜索 160 天内容…" />
+  </div>
   <div class="io-btns">
+    <button class="io-btn" id="btnReview" title="重测做错的题：答对自动移出错题本，答错保留">🔁 错题 <strong id="wrongCount">0</strong></button>
     <button class="io-btn" id="btnExport" title="把学习进度和测验成绩导出为 JSON 文件备份">⬇︎ 导出进度</button>
     <button class="io-btn" id="btnImport" title="从之前导出的 JSON 文件恢复进度">⬆︎ 导入进度</button>
     <input type="file" id="importFile" accept="application/json,.json" style="display:none" />
@@ -509,10 +550,15 @@ const FIGURES = {
 
 const STORAGE_KEY = "ml-study-v1";
 const QUIZ_KEY = "ml-quiz-v1";
+const WRONG_KEY = "ml-wrong-v1";
 
 // ============== state ==============
 let CURRENT_DAY = 1;
 let QUIZ = {};
+let WRONG = {};          // 错题本 { "day-qi": { day, qi, addedAt } }
+let VIEW = "day";        // day | search | review
+let SEARCH_INDEX_READY = false;
+let INDEXING = false;
 
 function loadState() {
   try {
@@ -524,6 +570,7 @@ function loadState() {
     }
   } catch (e) { console.warn("state load failed", e); }
   try { QUIZ = JSON.parse(localStorage.getItem(QUIZ_KEY) || "{}") || {}; } catch (e) { QUIZ = {}; }
+  try { WRONG = JSON.parse(localStorage.getItem(WRONG_KEY) || "{}") || {}; } catch (e) { WRONG = {}; }
 }
 function saveState() {
   try {
@@ -532,6 +579,13 @@ function saveState() {
 }
 function saveQuiz() {
   try { localStorage.setItem(QUIZ_KEY, JSON.stringify(QUIZ)); } catch (e) { console.warn("quiz save failed", e); }
+}
+function saveWrong() {
+  try { localStorage.setItem(WRONG_KEY, JSON.stringify(WRONG)); } catch (e) { console.warn("wrong save failed", e); }
+}
+function updateWrongBtn() {
+  const el = document.getElementById("wrongCount");
+  if (el) el.textContent = Object.keys(WRONG).length;
 }
 function isMastered(d) { const q = QUIZ[d]; return !!q && q.total > 0 && q.best / q.total >= 0.8; }
 function updateMastery() {
@@ -631,7 +685,7 @@ function buildSidebar() {
     }
     html.push(`</div>`);
   }
-  aside.innerHTML = html.join("");
+  setHTML(aside, html.join(""));
   // bind events
   aside.querySelectorAll(".week-label").forEach(el => {
     el.addEventListener("click", e => {
@@ -649,7 +703,10 @@ function buildSidebar() {
 
 // ============== content ==============
 function showDay(d) {
+  VIEW = "day";
   CURRENT_DAY = d;
+  const si = document.getElementById("searchInput");
+  if (si && si.value) si.value = "";
   saveState();
   history.replaceState(null, "", "#day-" + d);
   // refresh sidebar (active class)
@@ -690,7 +747,12 @@ function showDay(d) {
     </div>`;
   }
   const mileHtml = isMile ? renderMilestone(isMile) : "";
-  content.innerHTML = `
+  setHTML(content, `
+    <div class="day-nav">
+      <button class="nav-btn" id="navPrev" ${d <= 1 ? "disabled" : ""}>← Day ${d - 1}</button>
+      <span class="nav-hint">← / → 键切换天数</span>
+      <button class="nav-btn" id="navNext" ${d >= DAYS.length ? "disabled" : ""}>Day ${d + 1} →</button>
+    </div>
     <div class="day-card">
       <div class="day-head">
         <span class="day-badge">Day ${d} / 160</span>
@@ -705,7 +767,7 @@ function showDay(d) {
       <div class="ref-line">参考：<a href="docs/ML学习调研分析.md" target="_blank">学习诊断与规划</a> · <a href="https://reminders.apple.com" target="_blank">Apple Reminders</a> · 进度保存在浏览器 localStorage（换设备前先导出）</div>
     </div>
     ${mileHtml}
-  `;
+  `);
   // try to load figure; if exists, replace placeholder
   content.querySelectorAll(".fig-slot").forEach(slot => {
     const src = slot.dataset.src;
@@ -715,19 +777,25 @@ function showDay(d) {
       frame.src = src;
       frame.title = "anatomy 交互原理图";
       frame.loading = "lazy";
-      slot.innerHTML = "";
+      slot.replaceChildren();
       slot.appendChild(frame);
       return;
     }
     const img = new Image();
     img.onload = () => {
       img.className = "fig-img";
-      slot.innerHTML = "";
+      slot.replaceChildren();
       slot.appendChild(img);
     };
     img.onerror = () => { /* keep placeholder */ };
     img.src = src;
   });
+
+  // day nav buttons
+  const navPrev = document.getElementById("navPrev");
+  const navNext = document.getElementById("navNext");
+  if (navPrev) navPrev.addEventListener("click", () => showDay(d - 1));
+  if (navNext) navNext.addEventListener("click", () => showDay(d + 1));
 
   // bind checkboxes
   content.querySelectorAll(".sub-task input[type=checkbox]").forEach(cb => {
@@ -748,19 +816,25 @@ function showDay(d) {
 // ============== study content + quiz ==============
 const CONTENT = new Map();
 
+async function ensureContent(d) {
+  if (CONTENT.has(d)) return CONTENT.get(d);
+  const res = await fetch(`content/days/d${d}.json`);
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  const c = await res.json();
+  CONTENT.set(d, c);
+  return c;
+}
+
 async function loadContent(d) {
   const box = document.getElementById("study");
   if (!box) return;
   if (CONTENT.has(d)) { renderStudy(d, CONTENT.get(d)); return; }
-  box.innerHTML = '<div class="study-loading">⏳ 加载学习内容…</div>';
+  setHTML(box, '<div class="study-loading">⏳ 加载学习内容…</div>');
   try {
-    const res = await fetch(`content/days/d${d}.json`);
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const c = await res.json();
-    CONTENT.set(d, c);
+    const c = await ensureContent(d);
     if (CURRENT_DAY === d) renderStudy(d, c);
   } catch (e) {
-    box.innerHTML = `<div class="study-missing">📖 本日学习内容尚未生成（后台 worker 正在分批生成，稍后刷新重试）。<br><code>content/days/d${d}.json</code></div>`;
+    setHTML(box, `<div class="study-missing">📖 本日学习内容尚未生成（后台 worker 正在分批生成，稍后刷新重试）。<br><code>content/days/d${d}.json</code></div>`);
   }
 }
 
@@ -846,7 +920,7 @@ function renderStudy(d, c) {
     </div>`).join("");
   const q = QUIZ[d];
   const prevBest = q ? ` · 历史最佳 ${q.best}/${q.total}${isMastered(d) ? " ✓" : ""}` : "";
-  box.innerHTML = `
+  setHTML(box, `
     <div class="study-head">📘 学习内容</div>
     ${secs}
     <div class="keypoints"><div class="kp-h">🎯 要点回顾</div><ul>${kps}</ul></div>
@@ -859,7 +933,7 @@ function renderStudy(d, c) {
         <button class="quiz-submit">提交答案</button>
         <button class="quiz-retry" style="display:none">重做测验</button>
       </div>
-    </div>`;
+    </div>`);
   bindQuiz(d, c.quiz || []);
 }
 
@@ -894,6 +968,13 @@ function bindQuiz(day, quiz) {
       const ex = wrap.querySelector(".q-explain");
       if (ex) ex.style.display = "block";
     });
+    // 错题本：答对移出，答错记入
+    quiz.forEach((q, i) => {
+      const k = day + "-" + i;
+      if (answers[i] === q.answer) delete WRONG[k];
+      else WRONG[k] = { day, qi: i, addedAt: Date.now() };
+    });
+    saveWrong(); updateWrongBtn();
     const pct = Math.round(score / quiz.length * 100);
     const passed = pct >= 80;
     const prev = QUIZ[day] || { best: 0, total: quiz.length };
@@ -904,8 +985,8 @@ function bindQuiz(day, quiz) {
     }
     const res = box.querySelector(".quiz-result");
     res.className = "quiz-result " + (passed ? "pass" : "fail");
-    res.innerHTML = `<span>得分 ${score}/${quiz.length}（${pct}%）</span>` +
-      (passed ? '<span class="res-tag">已掌握 ✓</span>' : '<span class="res-tag">未达 80%，复习要点后重试</span>');
+    setHTML(res, `<span>得分 ${score}/${quiz.length}（${pct}%）</span>` +
+      (passed ? '<span class="res-tag">已掌握 ✓</span>' : '<span class="res-tag">未达 80%，复习要点后重试</span>'));
     submit.style.display = "none";
     retry.style.display = "inline-block";
     if (passed && !wasMastered) {
@@ -938,6 +1019,21 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
   }[c]));
+}
+
+// 统一渲染入口：DOMParser 惰性解析 + 消毒（去 script / on* 事件属性 / javascript: URL），
+// 在既有 escape-first 模板外加一层纵深防御；渲染一律走它，不再直接 innerHTML
+function setHTML(el, html) {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  doc.querySelectorAll("script").forEach(n => n.remove());
+  doc.querySelectorAll("*").forEach(n => {
+    for (const a of [...n.attributes]) {
+      const name = a.name.toLowerCase();
+      if (name.startsWith("on")) n.removeAttribute(a.name);
+      else if ((name === "href" || name === "src" || name === "xlink:href") && /^\s*javascript:/i.test(a.value)) n.removeAttribute(a.name);
+    }
+  });
+  el.replaceChildren(...doc.body.childNodes);
 }
 
 // ============== progress ==============
@@ -975,12 +1071,14 @@ function updateProgress() {
 
 // ============== 进度导出 / 导入 ==============
 function exportProgress() {
+  const read = k => { try { return JSON.parse(localStorage.getItem(k) || "{}"); } catch (e) { return {}; } };
   const data = {
     app: "ml-study-site",
     version: 1,
     exportedAt: new Date().toISOString(),
-    state: JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}"),
-    quiz: JSON.parse(localStorage.getItem(QUIZ_KEY) || "{}"),
+    state: read(STORAGE_KEY),
+    quiz: read(QUIZ_KEY),
+    wrong: read(WRONG_KEY),
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
@@ -1008,6 +1106,9 @@ function importProgress(file) {
       if (!confirm(`导入 ${tasks} 天的任务勾选、${quizzes} 天的测验成绩？\n（将覆盖当前进度）`)) return;
       localStorage.setItem(STORAGE_KEY, JSON.stringify(data.state));
       localStorage.setItem(QUIZ_KEY, JSON.stringify(data.quiz));
+      if (data.wrong && typeof data.wrong === "object") {
+        localStorage.setItem(WRONG_KEY, JSON.stringify(data.wrong));
+      }
       location.reload();
     } catch (e) {
       alert("导入失败：不是有效的进度备份文件（" + e.message + "）");
@@ -1031,15 +1132,234 @@ function bindIoButtons() {
   });
 }
 
+// ============== 全文搜索 ==============
+function stripMd(s) {
+  return String(s)
+    .replace(/```[a-zA-Z0-9]*\n?/g, "")
+    .replace(/^#{1,4}\s+/gm, "")
+    .replace(/\*\*/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function snippet(text, q, span) {
+  const t = stripMd(text);
+  const lower = q.toLowerCase();
+  const idx = t.toLowerCase().indexOf(lower);
+  if (idx < 0) return "";
+  const a = Math.max(0, idx - span);
+  const b = Math.min(t.length, idx + q.length + span);
+  const seg = t.slice(a, b);
+  const i2 = seg.toLowerCase().indexOf(lower);
+  return (a > 0 ? "…" : "") +
+    escapeHtml(seg.slice(0, i2)) +
+    "<mark>" + escapeHtml(seg.slice(i2, i2 + q.length)) + "</mark>" +
+    escapeHtml(seg.slice(i2 + q.length)) +
+    (b < t.length ? "…" : "");
+}
+
+async function ensureIndex(onProgress) {
+  if (SEARCH_INDEX_READY || INDEXING) return;
+  INDEXING = true;
+  try {
+    const missing = DAYS.map(x => x.day).filter(d => !CONTENT.has(d));
+    let done = 0;
+    for (let i = 0; i < missing.length; i += 16) {
+      await Promise.all(missing.slice(i, i + 16).map(d =>
+        ensureContent(d).catch(() => { }).then(() => { done++; if (onProgress) onProgress(done, missing.length); })
+      ));
+    }
+    SEARCH_INDEX_READY = true;
+  } finally {
+    INDEXING = false;
+  }
+}
+
+function showSearch(q) {
+  VIEW = "search";
+  const content = document.getElementById("content");
+  const needle = q.toLowerCase();
+  const results = [];
+  for (const d of DAYS) {
+    const c = CONTENT.get(d.day);
+    const snips = [];
+    const tSnip = d.title.toLowerCase().includes(needle) ? snippet(d.title, q, 26) : "";
+    const sSnip = d.summary && d.summary.toLowerCase().includes(needle) ? snippet(d.summary, q, 40) : "";
+    if (tSnip || sSnip) snips.push('<span class="sr-sec">概览</span>' + (tSnip || sSnip));
+    if (c) {
+      (c.sections || []).forEach(s => {
+        const sn = s.md && s.md.toLowerCase().includes(needle) ? snippet(s.md, q, 46) : "";
+        const hHit = s.h && s.h.toLowerCase().includes(needle);
+        if (sn || hHit) snips.push('<span class="sr-sec">' + escapeHtml(s.h || "") + '</span>' + (sn || snippet(s.md || "", q, 46)));
+      });
+      (c.keyPoints || []).forEach(k => {
+        const sn = snippet(k, q, 46);
+        if (sn) snips.push('<span class="sr-sec">要点</span>' + sn);
+      });
+    }
+    if (snips.length) results.push({ day: d.day, title: d.title, hours: d.hours, snips: snips.slice(0, 3), more: snips.length - 3 });
+  }
+  setHTML(content, `
+    <div class="sr-head">搜索「${escapeHtml(q)}」 · 命中 ${results.length} 天${SEARCH_INDEX_READY ? "" : ` · ⏳ 索引载入中 ${CONTENT.size}/${DAYS.length}，结果可能不全`}</div>
+    ${results.map(r => `
+      <a class="sr-item" href="#day-${r.day}">
+        <div class="sr-title">
+          <span class="sr-day">Day ${r.day}</span><span>${escapeHtml(r.title)}</span>
+          <span class="day-hours">${r.hours}h</span>
+          ${r.more > 0 ? `<span style="margin-left:auto;font-size:11px;color:var(--text-dim)">+${r.more} 处</span>` : ""}
+        </div>
+        ${r.snips.map(s => `<div class="sr-snip">${s}</div>`).join("")}
+      </a>`).join("")}
+    ${results.length ? "" : '<div class="rv-empty">没有找到相关内容<br><span style="font-size:12px">支持标题 / 小节 / 正文 / 要点关键词</span></div>'}
+    <button class="back-btn" id="backDay">← 返回 Day ${CURRENT_DAY}</button>
+  `);
+  content.querySelectorAll(".sr-item").forEach(el => {
+    el.addEventListener("click", e => {
+      e.preventDefault();
+      showDay(+el.getAttribute("href").slice(5));
+    });
+  });
+  document.getElementById("backDay").addEventListener("click", () => showDay(CURRENT_DAY));
+}
+
+// ============== 错题复习 ==============
+async function showReview() {
+  VIEW = "review";
+  const content = document.getElementById("content");
+  const entries = Object.values(WRONG);
+  if (!entries.length) {
+    setHTML(content, `<div class="rv-empty">🎉 错题本是空的<br>
+      <span style="font-size:12px;color:var(--text-dim)">测验做错的题会自动收进来，复习答对后自动移出</span><br>
+      <button class="back-btn" id="backDay">← 返回 Day ${CURRENT_DAY}</button></div>`);
+    document.getElementById("backDay").addEventListener("click", () => showDay(CURRENT_DAY));
+    return;
+  }
+  setHTML(content, '<div class="study-loading">⏳ 正在收集错题…</div>');
+  const total = entries.length;
+  const pool = [...entries].sort(() => Math.random() - 0.5).slice(0, 12);
+  const qs = [];
+  for (const e of pool) {
+    try {
+      const c = await ensureContent(e.day);
+      const q = (c.quiz || [])[e.qi];
+      const meta = DAYS.find(x => x.day === e.day);
+      if (q) qs.push({ day: e.day, qi: e.qi, q, dayTitle: meta ? meta.title : "" });
+    } catch (err) { /* 单日内容加载失败则跳过 */ }
+  }
+  renderReview(qs, total);
+}
+
+function renderReview(qs, totalBefore) {
+  const content = document.getElementById("content");
+  if (!qs.length) {
+    setHTML(content, '<div class="rv-empty">错题内容暂时加载失败，请稍后再试</div>');
+    return;
+  }
+  setHTML(content, `
+    <div class="quiz" id="reviewBox" style="margin-top:0">
+      <div class="quiz-head"><span>🔁 错题复习</span><span class="quiz-rule">随机 ${qs.length} 题 / 错题本共 ${totalBefore} 题 · 答对自动移出</span></div>
+      ${qs.map((it, i) => `
+        <div class="quiz-q" data-qi="${i}">
+          <div class="rv-q-tag">Day ${it.day} · ${escapeHtml(it.dayTitle)}</div>
+          <div class="qq"><span class="qn">${i + 1}</span><span>${escapeHtml(it.q.q)}</span></div>
+          ${it.q.options.map((o, j) => `<label class="qo"><input type="radio" name="rq${i}" value="${j}"><span>${mdInline(o)}</span></label>`).join("")}
+          <div class="q-explain">💡 ${escapeHtml(it.q.explain || "")}</div>
+        </div>`).join("")}
+      <div class="quiz-warn"></div>
+      <div class="quiz-result"></div>
+      <div class="quiz-actions">
+        <button class="quiz-submit">提交答案</button>
+        <button class="quiz-retry" style="display:none">换一组错题</button>
+        <button class="back-btn" id="backDay2">← 返回</button>
+      </div>
+    </div>`);
+  const box = document.getElementById("reviewBox");
+  const submit = box.querySelector(".quiz-submit");
+  const retry = box.querySelector(".quiz-retry");
+  document.getElementById("backDay2").addEventListener("click", () => showDay(CURRENT_DAY));
+  submit.addEventListener("click", () => {
+    const answers = qs.map((_, i) => {
+      const sel = box.querySelector(`input[name="rq${i}"]:checked`);
+      return sel ? +sel.value : -1;
+    });
+    const warn = box.querySelector(".quiz-warn");
+    const unanswered = answers.filter(a => a < 0).length;
+    if (unanswered > 0) {
+      warn.textContent = `还有 ${unanswered} 题未作答，全部作答后才能提交`;
+      warn.style.display = "block";
+      return;
+    }
+    warn.style.display = "none";
+    let score = 0;
+    qs.forEach((it, i) => {
+      const wrap = box.querySelector(`.quiz-q[data-qi="${i}"]`);
+      const ok = answers[i] === it.q.answer;
+      if (ok) score++;
+      wrap.classList.add(ok ? "correct" : "wrong");
+      wrap.querySelectorAll(".qo").forEach((lab, j) => {
+        if (j === it.q.answer) lab.classList.add("is-answer");
+        else if (j === answers[i]) lab.classList.add("is-wrong");
+      });
+      const ex = wrap.querySelector(".q-explain");
+      if (ex) ex.style.display = "block";
+      const k = it.day + "-" + it.qi;
+      if (ok) delete WRONG[k];
+      else WRONG[k].addedAt = Date.now();
+    });
+    saveWrong(); updateWrongBtn();
+    const res = box.querySelector(".quiz-result");
+    const left = Object.keys(WRONG).length;
+    res.className = "quiz-result " + (score === qs.length ? "pass" : "fail");
+    setHTML(res, `<span>答对 ${score}/${qs.length}</span><span class="res-tag">错题本剩余 ${left} 题${left ? "，点「换一组」继续" : "，全部清空 🎉"}</span>`);
+    submit.style.display = "none";
+    retry.style.display = "inline-block";
+    res.scrollIntoView({ block: "center", behavior: "smooth" });
+  });
+  retry.addEventListener("click", () => showReview());
+}
+
+// ============== 搜索框 / 错题按钮 / 快捷键 ==============
+function bindExtras() {
+  const si = document.getElementById("searchInput");
+  let debTimer = null;
+  si.addEventListener("input", () => {
+    clearTimeout(debTimer);
+    debTimer = setTimeout(() => {
+      const q = si.value.trim();
+      if (q.length >= 2) {
+        showSearch(q);
+        if (!SEARCH_INDEX_READY) {
+          ensureIndex(() => {
+            const cur = si.value.trim();
+            if (cur.length >= 2 && VIEW === "search") showSearch(cur);
+          });
+        }
+      } else if (VIEW === "search") {
+        showDay(CURRENT_DAY);
+      }
+    }, 250);
+  });
+  document.getElementById("btnReview").addEventListener("click", () => showReview());
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && VIEW !== "day") { showDay(CURRENT_DAY); return; }
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable) return;
+    if (e.key === "ArrowLeft" && VIEW === "day" && CURRENT_DAY > 1) showDay(CURRENT_DAY - 1);
+    else if (e.key === "ArrowRight" && VIEW === "day" && CURRENT_DAY < DAYS.length) showDay(CURRENT_DAY + 1);
+  });
+}
+
 // ============== init ==============
 async function init() {
   loadState();
+  updateWrongBtn();
   bindIoButtons();
+  bindExtras();
   try {
     const res = await fetch("days.json");
     DAYS = await res.json();
   } catch (e) {
-    document.getElementById("content").innerHTML = `<div class="empty"><h2>加载失败</h2><p>无法读取 <code>days.json</code>。请确认通过 http(s):// 访问（不要用 file:// 双击打开），且站点文件完整。</p></div>`;
+    setHTML(document.getElementById("content"), `<div class="empty"><h2>加载失败</h2><p>无法读取 <code>days.json</code>。请确认通过 http(s):// 访问（不要用 file:// 双击打开），且站点文件完整。</p></div>`);
     return;
   }
   buildSidebar();
