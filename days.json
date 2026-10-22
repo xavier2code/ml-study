@@ -3,8 +3,12 @@
     "day": 1,
     "title": "信息论 + numpy 基础 + 概率入门",
     "hours": 4.0,
-    "summary": "Phase 0 Week 1 启动。",
+    "summary": "Phase 0 Week 1 启动。先花 30 分钟做数学热身（log₂ / Σ / 矩阵），再进正题。",
     "subs": [
+      {
+        "name": "热身：log₂ 翻倍计数、Σ 加权平均、向量矩阵形状——读懂今天公式的三件工具",
+        "hours": "0.5h"
+      },
       {
         "name": "信息论：熵、KL 散度、互信息（3Blue1Brown *Information Theory*）",
         "hours": "1.5h"
@@ -15,7 +19,7 @@
       },
       {
         "name": "概率基础：常见分布、贝叶斯（StatQuest *Statistics Fundamentals* 第 1–4 集）",
-        "hours": "1.5h"
+        "hours": "1h"
       }
     ]
   },

@@ -5,7 +5,7 @@
      stale-while-revalidate —— 先回缓存（秒开），后台静默更新；
      首次访问的天/图会被缓存下来，做一次全文搜索即缓存全部 160 天
    - VERSION 变更即弃旧缓存 */
-const VERSION = "ml-study-v2";
+const VERSION = "ml-study-v3";
 const SHELL = [
   "./",
   "./index.html",
