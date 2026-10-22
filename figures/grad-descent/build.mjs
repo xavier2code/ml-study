@@ -35,6 +35,16 @@ const LATHE_KIT = (() => {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const theme = process.argv.includes("--light") ? "light" : "dark";
 
+// The kit's plate corners are absolutely positioned (hint bottom-left, readout
+// bottom-right, both white-space:nowrap). Long readouts therefore overlap the
+// hint, and long hints overflow the card on narrow screens. Give each its own
+// line and let the hint wrap.
+const PLATE_CSS = `<style>
+.iso-plate{padding-bottom:74px}
+.iso-plate-corner[data-corner="hint"]{bottom:24px;left:0;right:0;white-space:normal;line-height:1.35}
+.iso-plate-corner[data-corner="readout"]{bottom:0;left:0;right:0;text-align:right}
+</style>`;
+
 const WIDTH = 620;
 const HEIGHT = 380;
 
@@ -149,17 +159,20 @@ function chute() {
   out.push(`<path class="iso-shape" data-tone="lo" d="${frontFace}"/>`);
   // crisp edges: the front top edge and the back top edge
   out.push(`<path class="iso-line" data-tone="lo" d="${k.pathOf(front)}"/>`);
-  out.push(`<path class="iso-line" data-tone="faint" d="${k.pathOf(back)}"/>`);
+  // the back edge is closed at the far end, so its two ends land on the end cap
+  out.push(`<path class="iso-line" data-tone="faint" data-free="start" d="${k.pathOf(back)}"/>`);
+  out.push(`<path class="iso-line" data-tone="faint" d="${k.pathOf([k.iso([LAND_X_TO, yA, surfaceTZ(LAND_X_TO)], P), k.iso([LAND_X_TO, yB, surfaceTZ(LAND_X_TO)], P)])}"/>`);
 
   // side rails (thin strips on the outside y edges)
   for (const ySide of [yA, yB - 1.5]) {
     out.push(S(k.slabOf({ x: LAND_X_FROM, y: ySide, w: LAND_X_TO - LAND_X_FROM, d: 1.5, r: 0.4 }, LAND_BOT_Z - BALL_R - 0.6, 1.0, P, 3, 0.2), { tone: "mid" }));
   }
-  // tick marks along the front edge (theta axis)
+  // tick marks along the front edge (theta axis): ruler ticks, so the inner end
+  // is allowed to stop on the surface
   for (let i = 0; i <= 10; i++) {
     const x = LAND_X_FROM + (i / 10) * (LAND_X_TO - LAND_X_FROM);
     const tickLen = (i % 5 === 0) ? 3 : 1.6;
-    out.push(L(k.lineOnTop([x, yB + 0.6], [x, yB + 0.6 + tickLen], 0, P), { tone: "lo" }));
+    out.push(L(k.lineOnTop([x, yB + 0.6], [x, yB + 0.6 + tickLen], 0, P), { tone: "lo", free: "end" }));
   }
   return out.join("");
 }
@@ -212,7 +225,7 @@ const needleAt = (share) => {
   const angle = -Math.PI * 0.75 + share * Math.PI * 1.5;
   const [x, y] = DIAL;
   return k.lineOnTop(
-    [x - Math.sin(angle) * 3.4, y + Math.cos(angle) * 3.4],
+    [x - Math.sin(angle) * 1.2, y + Math.cos(angle) * 1.2],
     [x + Math.sin(angle) * (DIAL_R - 4), y - Math.cos(angle) * (DIAL_R - 4)],
     DIAL_TOP + 0.2, P);
 };
@@ -266,7 +279,7 @@ const clamp = (v,lo,hi)=>Math.min(hi,Math.max(lo,v));
 let x = ${startX}, target = x;
 function buildSpring(ballCx, ballTopZ) {
   // hand-built vertical helix (coil() does not support a z axis)
-  const alongFrom = ballTopZ + 0.4;
+  const alongFrom = ballTopZ - 0.6;   // the coil starts inside the ball, so its end is covered
   const alongTo   = TOP_PLATE_Z + 1.5;   // fix #3: reaches into the anchor plate
   const count     = SPRING_TURNS * 12;
   const pts = [];
@@ -289,8 +302,8 @@ function buildSpring(ballCx, ballTopZ) {
   }
   if (run.length) (near ? front : back).push(run);
   const toPath = (r) => r.map((p, i) => (i ? "L" : "M") + p[0].toFixed(2) + " " + p[1].toFixed(2)).join("");
-  spring.innerHTML = '<path class="iso-line" data-tone="mid" d="'+back.map(toPath).join(" ")+'"/>'
-                   + '<path class="iso-line" data-tone="hi" d="'+front.map(toPath).join(" ")+'"/>';
+  spring.innerHTML = '<path class="iso-line" data-tone="mid" data-free="both" d="'+back.map(toPath).join(" ")+'"/>'
+                   + '<path class="iso-line" data-tone="hi" data-free="both" d="'+front.map(toPath).join(" ")+'"/>';
 }
 const needleAt = ${needleAt.toString().replace("k.lineOnTop", "lineOnTop")};
 function draw() {
@@ -338,7 +351,7 @@ stage.addEventListener("keydown", (event) => {
 draw();
 `;
 
-const body = k.plateHtml({
+const body = PLATE_CSS + k.plateHtml({
   fig: "Fig 1",
   title: "Gradient descent",
   hint: "Hover to slide the ball; arrow keys nudge it",

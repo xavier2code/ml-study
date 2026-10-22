@@ -22,6 +22,16 @@ import { kitScript } from "/Users/xavier/.agents/skills/anatomy/scripts/inline-k
 const HERE = dirname(fileURLToPath(import.meta.url));
 const theme = process.argv.includes("--light") ? "light" : "dark";
 
+// The kit's plate corners are absolutely positioned (hint bottom-left, readout
+// bottom-right, both white-space:nowrap). Long readouts therefore overlap the
+// hint, and long hints overflow the card on narrow screens. Give each its own
+// line and let the hint wrap.
+const PLATE_CSS = `<style>
+.iso-plate{padding-bottom:74px}
+.iso-plate-corner[data-corner="hint"]{bottom:24px;left:0;right:0;white-space:normal;line-height:1.35}
+.iso-plate-corner[data-corner="readout"]{bottom:0;left:0;right:0;text-align:right}
+</style>`;
+
 const WIDTH = 640;
 const HEIGHT = 400;
 
@@ -99,18 +109,18 @@ function tableRotSVG(R, phase) {
     const d = (120 * j + R) * RADc;
     const cs = Math.cos(d), sn = Math.sin(d);
     // sector divider, hub to rim
-    out += L(k.lineOnTop([9 * cs, 9 * sn], [42.5 * cs, 42.5 * sn], ENG_Z, P), { tone: "lo" });
+    out += L(k.lineOnTop([9 * cs, 9 * sn], [42.5 * cs, 42.5 * sn], ENG_Z, P), { tone: "lo", free: "both" });
     // rim chevron marking the notch line
     const w = 2.6 * RADc;
-    out += L(k.lineOnTop([46 * Math.cos(d - w), 46 * Math.sin(d - w)], [44.4 * cs, 44.4 * sn], ENG_Z, P), { tone: "lo" });
-    out += L(k.lineOnTop([46 * Math.cos(d + w), 46 * Math.sin(d + w)], [44.4 * cs, 44.4 * sn], ENG_Z, P), { tone: "lo" });
+    out += L(k.lineOnTop([46 * Math.cos(d - w), 46 * Math.sin(d - w)], [44.4 * cs, 44.4 * sn], ENG_Z, P), { tone: "lo", free: "both" });
+    out += L(k.lineOnTop([46 * Math.cos(d + w), 46 * Math.sin(d + w)], [44.4 * cs, 44.4 * sn], ENG_Z, P), { tone: "lo", free: "both" });
     // sector arc near the rim (the current sector is picked out)
     const a0 = d + 8 * RADc, a1 = d + 112 * RADc, pts = [];
     for (let i = 0; i <= 14; i++) {
       const a = a0 + (a1 - a0) * i / 14;
       pts.push([38.5 * Math.cos(a), 38.5 * Math.sin(a)]);
     }
-    out += L(k.onTop(pts, ENG_Z, P), { tone: j === phase ? "hi" : "faint" });
+    out += L(k.onTop(pts, ENG_Z, P), { tone: j === phase ? "hi" : "faint", free: "both" });
     // sector centre dot — the stylus lands on it when the sector is current
     const c = (60 + 120 * j + R) * RADc;
     out += D([at([DOT_R * Math.cos(c), DOT_R * Math.sin(c), ENG_Z])], { size: 0.8, tone: j === phase ? "hi" : "lo" });
@@ -120,7 +130,7 @@ function tableRotSVG(R, phase) {
     const face = Math.cos((120 * j + R - AZ) * RADc);
     if (face > 0.1) {
       const al = Math.min(1, (face - 0.1) / 0.3);
-      out += `<path class="iso-line" data-tone="lo" d="${k.pathOf([k.iso([TBL_R * cs, TBL_R * sn, 8.5], P), k.iso([TBL_R * cs, TBL_R * sn, 20], P)])}" style="opacity:${al.toFixed(2)}"/>`;
+      out += `<path class="iso-line" data-tone="lo" data-free="both" d="${k.pathOf([k.iso([TBL_R * cs, TBL_R * sn, 8.5], P), k.iso([TBL_R * cs, TBL_R * sn, 20], P)])}" style="opacity:${al.toFixed(2)}"/>`;
     }
   }
   // hub index line, spinning with the table
@@ -198,7 +208,7 @@ function plate() {
   out.push(S(k.slabOf(lp, 0, 1.4, P, 3, 0.3), { tone: "mid" }));
   out.push(L(k.planOutline(k.insetPlan(lp, 2.5), 1.4, P), { tone: "lo" }));
   for (const ry of [-60.5, -57.5, -54.5]) {
-    out.push(L(k.lineOnTop([lp.x + 5, ry], [lp.x + lp.w - 5, ry], 1.4, P), { tone: "faint" }));
+    out.push(L(k.lineOnTop([lp.x + 5, ry], [lp.x + lp.w - 5, ry], 1.4, P), { tone: "faint", free: "both" }));
   }
   out.push(D([at([lp.x + 3.4, lp.y + 3.4, 1.4]), at([lp.x + lp.w - 3.4, lp.y + 3.4, 1.4])], { size: 0.45 }));
   return out.join("");
@@ -394,7 +404,7 @@ stage.addEventListener("keydown", (event) => {
 draw();
 `;
 
-const body = k.plateHtml({
+const body = PLATE_CSS + k.plateHtml({
   fig: "Fig 7",
   title: "ReAct loop",
   hint: "Click or arrow keys step the table",

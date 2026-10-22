@@ -21,6 +21,16 @@ import { kitScript } from "/Users/xavier/.agents/skills/anatomy/scripts/inline-k
 const HERE = dirname(fileURLToPath(import.meta.url));
 const theme = process.argv.includes("--light") ? "light" : "dark";
 
+// The kit's plate corners are absolutely positioned (hint bottom-left, readout
+// bottom-right, both white-space:nowrap). Long readouts therefore overlap the
+// hint, and long hints overflow the card on narrow screens. Give each its own
+// line and let the hint wrap.
+const PLATE_CSS = `<style>
+.iso-plate{padding-bottom:74px}
+.iso-plate-corner[data-corner="hint"]{bottom:24px;left:0;right:0;white-space:normal;line-height:1.35}
+.iso-plate-corner[data-corner="readout"]{bottom:0;left:0;right:0;text-align:right}
+</style>`;
+
 const WIDTH = 620;
 const HEIGHT = 400;
 
@@ -207,7 +217,7 @@ function weightsOf(q) {
   const s = e.reduce((a, b) => a + b, 0);
   return e.map((v) => v / s);
 }
-const toneOf = (w) => (w > 0.32 ? "lit" : w > 0.14 ? "hi" : w > 0.05 ? "mid" : "faint");
+const toneOf = (w) => (w > 0.3 ? "lit" : w > 0.12 ? "hi" : w > 0.035 ? "mid" : "lo");
 
 function buildCarriage(x, w) {
   const out = [];
@@ -248,7 +258,7 @@ function buildWires(x, w) {
     const p = iso([TX[i], 0, TOPS[i] + 0.5], P);
     const wi = w[i];
     const tone = toneOf(wi);
-    out += '<path class="iso-line" data-tone="' + tone + '" d="' + pathOf([hub, p]) + '" style="stroke-width:' + (0.45 + wi * 2).toFixed(2) + '"/>';
+    out += '<path class="iso-line" data-tone="' + tone + '" d="' + pathOf([hub, p]) + '" style="stroke-width:' + (0.6 + wi * 3.2).toFixed(2) + '"/>';
     out += dotsSvg([p], { size: (0.8 + wi * 4.2).toFixed(2), tone });
   }
   return out;
@@ -300,7 +310,7 @@ stage.addEventListener("keydown", (event) => {
 draw();
 `;
 
-const body = k.plateHtml({
+const body = PLATE_CSS + k.plateHtml({
   fig: "Fig 5",
   title: "Self-attention",
   hint: "Hover to slide the query; arrow keys nudge it",

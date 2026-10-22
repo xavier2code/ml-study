@@ -21,6 +21,16 @@ import { kitScript } from "/Users/xavier/.agents/skills/anatomy/scripts/inline-k
 const HERE = dirname(fileURLToPath(import.meta.url));
 const theme = process.argv.includes("--light") ? "light" : "dark";
 
+// The kit's plate corners are absolutely positioned (hint bottom-left, readout
+// bottom-right, both white-space:nowrap). Long readouts therefore overlap the
+// hint, and long hints overflow the card on narrow screens. Give each its own
+// line and let the hint wrap.
+const PLATE_CSS = `<style>
+.iso-plate{padding-bottom:74px}
+.iso-plate-corner[data-corner="hint"]{bottom:24px;left:0;right:0;white-space:normal;line-height:1.35}
+.iso-plate-corner[data-corner="readout"]{bottom:0;left:0;right:0;text-align:right}
+</style>`;
+
 const WIDTH = 620;
 const HEIGHT = 380;
 
@@ -128,9 +138,12 @@ function hill() {
   const out = [];
   for (const st of STEPS) {
     out.push(S(k.extrude(ELL(st.a, st.b), 0, st.h, P), { tone: st.h === 20 ? "mid" : "lo", crease: "lo" }));
-    // contour label on each step's top, toward the front-right of the band
-    const fa = st.h === 20 ? 0.5 : 0.78;
-    out.push(k.faceTextSvg(k.topMatrix([HILL[0] + st.a * fa - 1.6, HILL[1] + st.b * 0.5], st.h + 0.2, P, "x"), st.label, { size: 2.4, tone: "lo" }));
+    // The contour value is engraved on the top face of each terrace, on its
+    // left shoulder: inside this ring, outside the next (taller) one, and clear
+    // of the taller terrace in front of it.
+    const lx = HILL[0] - st.a * 0.8, ly = HILL[1] + st.b * 0.5;
+    const labelSize = Math.min(5.4, st.h * 1.1);
+    out.push(k.faceTextSvg(k.topMatrix([lx - labelSize * 0.62, ly], st.h + 0.2, P, "x"), st.label, { size: labelSize, tone: "hi", anchor: "middle" }));
   }
   // summit mast
   out.push(S(k.cylinder(HILL[0], HILL[1], 1.2, STEPS[3].h, MAST_H, P, 12), { tone: "mid", crease: "none" }));
@@ -152,6 +165,13 @@ function rail() {
   // the rail bar itself: a rotated rectangle extruded at RAIL_Z
   const mid = [(R0[0] + R1[0]) / 2, (R0[1] + R1[1]) / 2];
   out.push(S(k.extrude(rectRing(mid[0], mid[1], RAIL_LEN / 2 + 6, RAIL_W / 2, DIR), RAIL_Z, 3, P), { tone: "mid", crease: "lo" }));
+  // pickets standing on the rail: this is a fence, not a bar
+  for (let i = 1; i < 10; i++) {
+    const t = i / 10;
+    const [px, py] = posAt(t);
+    out.push(S(k.cylinder(px, py, 0.85, RAIL_Z + 3, 7, P, 10), { tone: "mid", crease: "none" }));
+    out.push(D([at([px, py, RAIL_Z + 10])], { size: 0.4, tone: "lo" }));
+  }
   // s* tangency mark: a lit dot on the rail top
   const [tx, ty] = posAt(S_STAR);
   out.push(D([at([tx, ty, RAIL_Z + 3])], { size: 0.62, tone: "lit" }));
@@ -324,7 +344,7 @@ stage.addEventListener("keydown", (event) => {
 draw();
 `;
 
-const body = k.plateHtml({
+const body = PLATE_CSS + k.plateHtml({
   fig: "Fig 1",
   title: "Lagrange fence",
   hint: "Hover or arrow keys to slide along the fence; Home jumps to the tangent point",

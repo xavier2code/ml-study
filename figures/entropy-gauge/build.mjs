@@ -18,6 +18,16 @@ import { kitScript } from "/Users/xavier/.agents/skills/anatomy/scripts/inline-k
 const HERE = dirname(fileURLToPath(import.meta.url));
 const theme = process.argv.includes("--light") ? "light" : "dark";
 
+// The kit's plate corners are absolutely positioned (hint bottom-left, readout
+// bottom-right, both white-space:nowrap). Long readouts therefore overlap the
+// hint, and long hints overflow the card on narrow screens. Give each its own
+// line and let the hint wrap.
+const PLATE_CSS = `<style>
+.iso-plate{padding-bottom:74px}
+.iso-plate-corner[data-corner="hint"]{bottom:24px;left:0;right:0;white-space:normal;line-height:1.35}
+.iso-plate-corner[data-corner="readout"]{bottom:0;left:0;right:0;text-align:right}
+</style>`;
+
 const WIDTH = 620;
 const HEIGHT = 380;
 
@@ -340,7 +350,7 @@ stage.addEventListener("keydown", (event) => {
 draw();
 `;
 
-const body = k.plateHtml({
+const body = PLATE_CSS + k.plateHtml({
   fig: "Fig 1",
   title: "Entropy gauge",
   hint: "Hover or arrow keys to bias the coin",

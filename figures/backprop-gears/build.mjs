@@ -24,6 +24,16 @@ import { kitScript } from "/Users/xavier/.agents/skills/anatomy/scripts/inline-k
 const HERE = dirname(fileURLToPath(import.meta.url));
 const theme = process.argv.includes("--light") ? "light" : "dark";
 
+// The kit's plate corners are absolutely positioned (hint bottom-left, readout
+// bottom-right, both white-space:nowrap). Long readouts therefore overlap the
+// hint, and long hints overflow the card on narrow screens. Give each its own
+// line and let the hint wrap.
+const PLATE_CSS = `<style>
+.iso-plate{padding-bottom:74px}
+.iso-plate-corner[data-corner="hint"]{bottom:24px;left:0;right:0;white-space:normal;line-height:1.35}
+.iso-plate-corner[data-corner="readout"]{bottom:0;left:0;right:0;text-align:right}
+</style>`;
+
 const WIDTH = 620;
 const HEIGHT = 380;
 
@@ -120,7 +130,7 @@ function protractor() {
   out.push(L(k.ring(cx, 0, PRO_R - 3.4, 0.1, P, 72), { tone: "faint" }));
   // engraved degree ticks over the viewer-facing 150° arc
   const ticks = k.radialTicks(cx, 0, PRO_R, 16, 3, 0.1, [1.2, 2.6], P, (60 * Math.PI) / 180, (150 * Math.PI) / 180);
-  out.push(L(ticks.minor, { tone: "lo" }), L(ticks.major, { tone: "mid" }));
+  out.push(L(ticks.minor, { tone: "lo", free: "start" }), L(ticks.major, { tone: "mid", free: "start" }));
   return out.join("");
 }
 
@@ -131,7 +141,7 @@ function oilers() {
     const d = TIP[i] + 3.2;
     const ox = CX[i] - d * 0.7071, oy = d * 0.7071;
     out.push(S(k.cylinder(ox, oy, 1.05, 0, 2.6, P, 14), { tone: "mid" }));
-    out.push(L(k.knurl(ox, oy, 1.05, 0.4, 2.2, 9, P, 0.15), { tone: "lo" }));
+    out.push(L(k.knurl(ox, oy, 1.05, 0.4, 2.2, 9, P, 0.15), { tone: "lo", free: "both" }));
     out.push(S(k.cylinder(ox, oy, 0.62, 2.6, 1.0, P, 10), { tone: "hi" }));
     out.push(D([at([ox, oy, 3.6])], { size: 0.4, tone: "lo" }));
   }
@@ -148,8 +158,8 @@ function gear(i) {
   out.push(L(k.ring(cx, 0, 3.0, 3.2, P, 20), { tone: "lo" }));
   // toothed disc: root cylinder + knurled wall + teeth ticks on the top face
   out.push(S(k.cylinder(cx, 0, root, GEAR_BOT, GEAR_H, P, 64, 0.8), { tone: "hi", crease: "lo" }));
-  out.push(L(k.knurl(cx, 0, root, GEAR_BOT + 0.3, GEAR_TOP - 0.3, teeth, P, 0.25), { tone: "lo" }));
-  out.push(L(k.radialTicks(cx, 0, tip, teeth, 4, GEAR_TOP + 0.05, [1.3, 1.3], P).minor, { tone: "lo" }));
+  out.push(L(k.knurl(cx, 0, root, GEAR_BOT + 0.3, GEAR_TOP - 0.3, teeth, P, 0.25), { tone: "lo", free: "both" }));
+  out.push(L(k.radialTicks(cx, 0, tip, teeth, 4, GEAR_TOP + 0.05, [1.3, 1.3], P).minor, { tone: "lo", free: "start" }));
   out.push(L(k.ring(cx, 0, root, GEAR_TOP + 0.05, P, 64), { tone: "lo" }));
   // live index line (filled every frame by the page script)
   out.push(`<g data-part="index${i}"></g>`);
@@ -159,7 +169,7 @@ function gear(i) {
   if (i === 3) {
     // crank boss: the error input
     out.push(S(k.cylinder(cx, 0, BOSS_R, GEAR_TOP + 2, BOSS_TOP - GEAR_TOP - 2, P, 20), { tone: "mid" }));
-    out.push(L(k.knurl(cx, 0, BOSS_R, GEAR_TOP + 2.4, BOSS_TOP - 0.4, 10, P, 0.2), { tone: "lo" }));
+    out.push(L(k.knurl(cx, 0, BOSS_R, GEAR_TOP + 2.4, BOSS_TOP - 0.4, 10, P, 0.2), { tone: "lo", free: "both" }));
   } else {
     out.push(L(k.ring(cx, 0, 1.9, SHAFT_TOP, P, 16), { tone: "mid" }));
     out.push(D([at([cx, 0, SHAFT_TOP])], { size: 0.45 }));
@@ -217,17 +227,17 @@ function draw() {
   for (let i = 0; i < 4; i++) {
     const cx = CX[i], root = ROOT[i], tip = TIP[i];
     const c = Math.cos(a[i]), s = Math.sin(a[i]);
-    let h = '<path class="iso-line" data-tone="lit" d="' + lineOnTop([cx, 0], [cx + c * root, s * root], ZT, P) + '" style="stroke-width:1.5"/>';
+    let h = '<path class="iso-line" data-tone="lit" data-free="start" d="' + lineOnTop([cx, 0], [cx + c * root, s * root], ZT, P) + '" style="stroke-width:1.5"/>';
     h += '<path class="iso-line" data-tone="lit" d="' + lineOnTop([cx + c * root, s * root], [cx + c * tip, s * tip], ZT, P) + '" style="stroke-width:2.4"/>';
     for (const da of [2.2, -2.2]) { // companion teeth marks riding the index
       const cc = Math.cos(a[i] + da), ss = Math.sin(a[i] + da);
-      h += '<path class="iso-line" data-tone="hi" d="' + lineOnTop([cx + cc * (root - 2.6), ss * (root - 2.6)], [cx + cc * root, ss * root], ZT, P) + '"/>';
+      h += '<path class="iso-line" data-tone="hi" data-free="both" d="' + lineOnTop([cx + cc * (root - 2.6), ss * (root - 2.6)], [cx + cc * root, ss * root], ZT, P) + '"/>';
     }
     idx[i].innerHTML = h;
   }
   const bx = CX[3] + Math.cos(crank) * ARM, by = Math.sin(crank) * ARM;
   crankG.innerHTML =
-    '<path class="iso-line" data-tone="hi" d="' + lineOnTop([CX[3], 0], [bx, by], ZA, P) + '" style="stroke-width:2.8"/>' +
+    '<path class="iso-line" data-tone="hi" data-free="start" d="' + lineOnTop([CX[3], 0], [bx, by], ZA, P) + '" style="stroke-width:2.8"/>' +
     solidSvg(cylinder(bx, by, KNOB_R, ZA, KNOB_H, P, 20), { tone: "hi", crease: "lo" }) +
     lineSvg(knurl(bx, by, KNOB_R, ZA + 0.4, ZA + KNOB_H - 0.3, 10, P, 0.15), { tone: "lo" }) +
     dotsSvg([iso([bx, by, ZA + KNOB_H], P)], { size: 0.55, tone: "lit" });
@@ -274,7 +284,7 @@ stage.addEventListener("keydown", (event) => {
 draw();
 `;
 
-const body = k.plateHtml({
+const body = PLATE_CSS + k.plateHtml({
   fig: "Fig 3",
   title: "Backpropagation",
   hint: "Hover to crank δ · ←/→ nudge",

@@ -576,17 +576,17 @@ const FIGURES = {
   // Phase 0 — gradient descent as a test rig
   4: { src: "figures/grad-descent/grad-descent.html", caption: "梯度下降的物理比喻：钢球=参数 θ，滑道=loss 曲面，弹簧=学习率压力，刻度盘=当前 loss。悬停可滑动小球，观察 loss 随 θ 下降。" },
   // Phase 0 — Lagrange multipliers as a fence across a contour model
-  6: { src: "figures/lagrange-fence/lagrange-fence.html", caption: "拉格朗日乘子的几何：阶梯等高线地形=目标函数 f 的山（20/40/60 等高线），直栅栏=约束 g=0，滑块沿栅栏移动、探杆触地读出高度 f。最好点在等高线与栅栏相切处（栏上亮点）——此时对齐盘两根指针重合：∇f ∥ ∇g，比值 λ=影子价格（约束松一格的边际收益）。悬停或方向键滑动，Home 跳到切点。" },
+  6: { src: "figures/lagrange-fence/lagrange-fence.html", caption: "拉格朗日乘子的几何：阶梯等高线地形=目标函数 f 的山（四级台阶对应 f = 20/40/60/74），直栅栏=约束 g=0，滑块沿栅栏移动、探杆触地读出高度 f。最好点在等高线与栅栏相切处（栏上亮点）——此时对齐盘两根指针重合：∇f ∥ ∇g，比值 λ=影子价格（约束松一格的边际收益）。悬停或方向键滑动，Home 跳到切点。" },
   // Phase 1 — bias-variance
   11: { src: "figures/bias-variance/bias-variance.html", caption: "偏差-方差 trade-off：天平左盘=偏差(欠拟合)，右盘=方差(过拟合)，底座旋钮=模型复杂度——旋钮越大左盘越轻右盘越重，塔上表盘的指针划出 U 形总误差曲线，刻度尺上标出了最优点。悬停或方向键调节复杂度。" },
   // Phase 2 — backprop as a chain of gears
   37: { src: "figures/backprop-gears/backprop-gears.html", caption: "反向传播的物理比喻：四级啮合齿轮组，最右端的大齿轮带摇柄=误差信号 δ，反向驱动整条齿轮链。相邻齿轮反向旋转(梯度符号)，齿数比=局部雅可比(×1.30/×1.31/×1.29)，亮色指针线=各层梯度方向，读数栏=链式法则逐层衰减的 |g|。悬停转动摇柄。" },
   // Phase 2 — CNN convolution
-  52: { src: "figures/cnn-sliding/cnn-sliding.html", caption: "CNN 卷积运算：蚀刻网格=输入特征图(中间亮列=边缘模式)，龙门架上的 3×3 冲头=卷积核，沿轨道滑动每停一格(步长 stride=1)，前缘输出条上对应数值灯亮起(Σ=9 格覆盖值归一化)。悬停或方向键滑动冲头。" },
+  50: { src: "figures/cnn-sliding/cnn-sliding.html", caption: "CNN 卷积运算：蚀刻网格=输入特征图(中间亮列=边缘模式)，龙门架上的 3×3 冲头=卷积核，沿轨道滑动每停一格(步长 stride=1)，前缘输出条上对应数值灯亮起(Σ=9 格覆盖值归一化)。悬停或方向键滑动冲头。" },
   // Phase 3 — self-attention
   71: { src: "figures/self-attention/self-attention.html", caption: "Self-Attention：轨道上 7 个令牌块=序列 tokens，顶部滑车=Query，从滑车垂下的吊索连向每个 token——吊索粗细/亮度=softmax 注意力权重(离 Query 越近权重越高)，滑车上的小表=最大权重值。悬停移动 Query 观察权重重新分布。" },
   // Phase 4 — KV cache vs PagedAttention
-  113: { src: "figures/paged-attention/paged-attention.html", caption: "PagedAttention：同一份 KV cache 数据的两种存法——左托盘=连续预留(参差不齐+深色碎片空隙，浪费 34%)，右托盘=分页池(整齐等高页，浪费仅 2%)，中央表盘指针=显存浪费率，前缘手柄=调度模式切换。点击或方向键拨动手柄对比。" },
+  114: { src: "figures/paged-attention/paged-attention.html", caption: "PagedAttention：同一份 KV cache 数据的两种存法——左托盘=连续预留(参差不齐+深色碎片空隙，浪费 34%)，右托盘=分页池(整齐等高页，浪费仅 2%)，中央表盘指针=显存浪费率，前缘手柄=调度模式切换。点击或方向键拨动手柄对比。" },
   // Phase 5 — Agent ReAct loop
   141: { src: "figures/react-loop/react-loop.html", caption: "ReAct Agent 循环：分度转台三等分——Thought / Action / Observation，固定探针压在当前扇区=当前执行步，棘爪每步咔哒一次，侧面计数轮=完成的完整循环数(模 10)。点击或 → 键推进一个阶段。" },
 };

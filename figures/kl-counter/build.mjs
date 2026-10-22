@@ -17,6 +17,16 @@ import { kitScript } from "/Users/xavier/.agents/skills/anatomy/scripts/inline-k
 const HERE = dirname(fileURLToPath(import.meta.url));
 const theme = process.argv.includes("--light") ? "light" : "dark";
 
+// The kit's plate corners are absolutely positioned (hint bottom-left, readout
+// bottom-right, both white-space:nowrap). Long readouts therefore overlap the
+// hint, and long hints overflow the card on narrow screens. Give each its own
+// line and let the hint wrap.
+const PLATE_CSS = `<style>
+.iso-plate{padding-bottom:74px}
+.iso-plate-corner[data-corner="hint"]{bottom:24px;left:0;right:0;white-space:normal;line-height:1.35}
+.iso-plate-corner[data-corner="readout"]{bottom:0;left:0;right:0;text-align:right}
+</style>`;
+
 const WIDTH = 620;
 const HEIGHT = 380;
 
@@ -28,8 +38,8 @@ const FOOT_H = 5;
 // tape decks (rear)
 const TAPE_Y = -44;
 const DECKS = [
-  { spool: [-102, TAPE_Y], from: -92, to: -52, tag: "P", book: { at: [-77, -10], title: "Q code 1,1" }, pattern: [1, 1, 1, 1, 1, 1, 1, 1, 1, 0] },
-  { spool: [8, TAPE_Y], from: 18, to: 58, tag: "Q", book: { at: [33, -10], title: "P code .15,3.32" }, pattern: [1, 0, 1, 0, 1, 0, 1, 0, 1, 0] },
+  { spool: [-102, TAPE_Y], from: -92, to: -52, tag: "P", book: { at: [-77, -6], title: "Q code", sub: "1 / 1 bit" }, pattern: [1, 1, 1, 1, 1, 1, 1, 1, 1, 0] },
+  { spool: [8, TAPE_Y], from: 18, to: 58, tag: "Q", book: { at: [33, -6], title: "P code", sub: "0.15 / 3.32" }, pattern: [1, 0, 1, 0, 1, 0, 1, 0, 1, 0] },
 ];
 const TAPE_Z = 12.6;
 const TAPE_H = 1.4;
@@ -127,9 +137,9 @@ function symbolsAt(deck, offset) {
     if (x < deck.from + 1.5) continue;
     const kind = deck.pattern[((Math.round((x - offset - deck.from) / PITCH) % 10) + 10) % 10];
     if (kind === 1) {
-      out += D([at([x, TAPE_Y, TAPE_Z + TAPE_H + 0.3])], { size: 0.85, tone: "hi" });
+      out += D([at([x, TAPE_Y, TAPE_Z + TAPE_H + 0.3])], { size: 1.7, tone: "hi" });
     } else {
-      const pts = [[x - 1.15, TAPE_Y + 0.9], [x + 1.15, TAPE_Y + 0.9], [x, TAPE_Y - 1.1]];
+      const pts = [[x - 2.2, TAPE_Y + 1.7], [x + 2.2, TAPE_Y + 1.7], [x, TAPE_Y - 2]];
       out += `<path class="iso-shape" data-tone="hi" d="${k.onTop(pts, TAPE_Z + TAPE_H + 0.3, P, true)}"/>`;
     }
   }
@@ -147,20 +157,30 @@ function spoolTicksAt(deck, angle) {
   return out + D([at([sx, sy, 22])], { size: 0.5, tone: "mid" });
 }
 
+// text on an upright plate: baseline along world +x, glyphs standing up in +z
+function plateText(at, text, size, tone = "hi") {
+  const o = k.iso(at, P);
+  const u = k.axisVector(P, [1, 0, 0]);
+  const v = k.axisVector(P, [0, 0, 1]);
+  return `<text class="iso-face-text" data-tone="${tone}" transform="matrix(${u[0].toFixed(3)} ${u[1].toFixed(3)} ${v[0].toFixed(3)} ${v[1].toFixed(3)} ${o[0].toFixed(2)} ${o[1].toFixed(2)})" font-size="${size}" text-anchor="middle">${text}</text>`;
+}
+
 // ---------- codebook stands ----------
 function bookStand(deck) {
   const out = [];
   const [bx, by] = deck.book.at;
-  out.push(S(k.cylinder(bx, by, 2.2, 0, 10, P, 18), { tone: "mid" }));
-  out.push(S(k.cylinder(bx, by, 3.4, 0, 2.2, P, 18), { tone: "mid" }));
-  out.push(S(k.slabOf({ x: bx - 4.5, y: by - 4.5, w: 9, d: 9, r: 1.5 }, 10, 3, P, 3, 0.4), { tone: "mid" }));
-  // the book itself
-  const book = { x: bx - 10.5, y: by - 7.5, w: 21, d: 15, r: 1.5 };
-  out.push(S(k.slabOf(book, 13, 3.2, P, 4, 0.5), { tone: "hi", crease: "lo" }));
-  out.push(L(k.planOutline(k.insetPlan(book, 1.6), 16.2, P, 3), { tone: "faint" }));
-  out.push(L(k.lineOnTop([book.x + 2.5, by + 4], [book.x + book.w - 2.5, by + 4], 16.2, P), { tone: "lo", free: "both" }));
-  out.push(k.faceTextSvg(k.topMatrix([bx - 8.6, by + 1.2], 16.4, P, "x"), deck.book.title, { size: 2.1, tone: "lo" }));
-  out.push(D([at([book.x + 1.8, by - 5.5, 16.2]), at([book.x + book.w - 1.8, by - 5.5, 16.2])], { size: 0.4 }));
+  // pedestal
+  out.push(S(k.cylinder(bx, by, 2.4, 0, 10, P, 20), { tone: "mid" }));
+  out.push(S(k.cylinder(bx, by, 3.6, 0, 2.2, P, 20), { tone: "mid" }));
+  out.push(S(k.slabOf({ x: bx - 5, y: by - 5, w: 10, d: 10, r: 1.5 }, 10, 2.4, P, 3, 0.4), { tone: "mid" }));
+  // the codebook, standing on the pedestal: a thin upright plate
+  const HW = 15, HT = 0.5, Z0 = 12.4, HH = 13;
+  out.push(S(k.extrude([[bx - HW, by - HT], [bx + HW, by - HT], [bx + HW, by + HT], [bx - HW, by + HT]], Z0, HH, P), { tone: "hi", crease: "lo" }));
+  out.push(L(k.lineOnTop([bx - HW + 1.4, by + HT], [bx + HW - 1.4, by + HT], Z0 + HH - 1.4, P), { tone: "lo", free: "both" }));
+  // engraved code lengths on the face that looks at the viewer
+  out.push(plateText([bx, by + HT + 0.2, Z0 + 8.4], deck.book.title, 4.6));
+  out.push(plateText([bx, by + HT + 0.2, Z0 + 3.4], deck.book.sub, 3.4, "mid"));
+  out.push(D([at([bx - HW + 2, by + HT, Z0 + 1]), at([bx + HW - 2, by + HT, Z0 + 1])], { size: 0.5, tone: "lo" }));
   return out.join("");
 }
 
@@ -307,9 +327,9 @@ function symbolsAt(deck, offset) {
     if (x < deck.from + 1.5) continue;
     const kind = deck.pattern[((Math.round((x - offset - deck.from) / PITCH) % 10) + 10) % 10];
     if (kind === 1) {
-      out += dotsSvg([iso([x, TAPE_Y, TAPE_Z + TAPE_H + 0.3], P)], { size: 0.85, tone: "hi" });
+      out += dotsSvg([iso([x, TAPE_Y, TAPE_Z + TAPE_H + 0.3], P)], { size: 1.7, tone: "hi" });
     } else {
-      const pts = [[x - 1.15, TAPE_Y + 0.9], [x + 1.15, TAPE_Y + 0.9], [x, TAPE_Y - 1.1]];
+      const pts = [[x - 2.2, TAPE_Y + 1.7], [x + 2.2, TAPE_Y + 1.7], [x, TAPE_Y - 2]];
       out += '<path class="iso-shape" data-tone="hi" d="' + onTop(pts, TAPE_Z + TAPE_H + 0.3, P, true) + '"/>';
     }
   }
@@ -325,7 +345,7 @@ function spoolTicksAt(deck, angle) {
   return out + dotsSvg([iso([sx, sy, 22], P)], { size: 0.5, tone: "mid" });
 }
 function crankPegAt(angle) {
-  const cx = ${JSON.stringify(CRANK)}[0], cy = ${JSON.stringify(CRANK)}[1];
+  const cx = ${CRANK[0]}, cy = ${CRANK[1]};
   const px = cx + Math.sin(angle) * 5, py = cy - Math.cos(angle) * 5;
   return solidSvg(cylinder(px, py, 1.5, 5.6, 4.4, P, 12), { tone: "hi" }) + dotsSvg([iso([px, py, 10], P)], { size: 0.55, tone: "lit" });
 }
@@ -385,7 +405,7 @@ stage.addEventListener("keydown", (event) => {
 draw(0, 0, 0);
 `;
 
-const body = k.plateHtml({
+const body = PLATE_CSS + k.plateHtml({
   fig: "Fig 1",
   title: "KL divergence",
   hint: "Hover or arrow keys to slide the punch head",
