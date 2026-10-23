@@ -573,10 +573,10 @@ const FIGURES = {
   1: { src: "figures/entropy-gauge/entropy-gauge.html", caption: "熵的物理比喻：阀轮=设定硬币偏置 p，连通器两根液柱=正/反两面的概率质量（总量守恒、此消彼长），表盘指针=这枚硬币的不确定度 H(p)。液柱齐平时指针满偏 1 bit；把液体全推到一边则归零——分布越集中，熵越小。悬停或方向键转动阀轮。" },
   // Phase 0 — KL asymmetry as crossed codebooks
   2: { src: "figures/kl-counter/kl-counter.html", caption: "KL 散度的不对称：两条纸带（P 带 9:1、Q 带 1:1）× 两本码本（Q 本每符号 1 bit；P 本 0.15/3.32 bit=−log₂p）交叉使用。打孔头滑到哪条带上，就用那对组合发电报——计数器读出每符号多付的比特：KL(P‖Q)=0.53，反方向 KL(Q‖P)=0.74。两边读数不同，因为 KL 不对称。悬停或方向键滑动打孔头。" },
-  // Phase 0 — gradient descent as a test rig
-  4: { src: "figures/grad-descent/grad-descent.html", caption: "梯度下降的物理比喻：钢球=参数 θ，滑道=loss 曲面，弹簧=学习率压力，刻度盘=当前 loss。悬停可滑动小球，观察 loss 随 θ 下降。" },
   // Phase 0 — Lagrange multipliers as a fence across a contour model
   6: { src: "figures/lagrange-fence/lagrange-fence.html", caption: "拉格朗日乘子的几何：阶梯等高线地形=目标函数 f 的山（四级台阶对应 f = 20/40/60/74），直栅栏=约束 g=0，滑块沿栅栏移动、探杆触地读出高度 f。最好点在等高线与栅栏相切处（栏上亮点）——此时对齐盘两根指针重合：∇f ∥ ∇g，比值 λ=影子价格（约束松一格的边际收益）。悬停或方向键滑动，Home 跳到切点。" },
+  // Phase 1 — gradient descent as a test rig (学习率 η 怎么选)
+  9: { src: "figures/grad-descent/grad-descent.html", caption: "梯度下降的物理比喻：钢球=参数 θ，滑道=loss 曲面，弹簧=学习率压力（弹簧越硬步子越大：太硬则震荡发散，太软则爬行龟速），刻度盘=当前 loss。悬停可滑动小球，观察 loss 随 θ 下降；把参数放在陡坡上，小球会在谷底来回摆动——这正是学习率过大的现场。" },
   // Phase 1 — bias-variance
   11: { src: "figures/bias-variance/bias-variance.html", caption: "偏差-方差 trade-off：天平左盘=偏差(欠拟合)，右盘=方差(过拟合)，底座旋钮=模型复杂度——旋钮越大左盘越轻右盘越重，塔上表盘的指针划出 U 形总误差曲线，刻度尺上标出了最优点。悬停或方向键调节复杂度。" },
   // Phase 2 — backprop as a chain of gears
